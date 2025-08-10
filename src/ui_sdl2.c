@@ -347,7 +347,6 @@ static int sdlkey_to_hpkey( SDL_Keycode k )
             return HPKEY_EEX;
         case SDLK_SPACE:
             return HPKEY_SPC;
-        case SDLK_F1:
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
             return HPKEY_ENTER;
@@ -396,6 +395,7 @@ static int sdlkey_to_hpkey( SDL_Keycode k )
         case SDLK_LALT:
         case SDLK_RALT:
             return HPKEY_ALPHA;
+        case SDLK_F1:
         case SDLK_F7:
         case SDLK_F10:
             // please_exit = true;

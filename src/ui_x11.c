@@ -1887,7 +1887,6 @@ static void decode_key( XEvent* xev, KeySym sym, char* buf, int buflen )
         case XK_comma:
             key_event( HPKEY_MUL, xev );
             break;
-        case XK_F1:
         case XK_KP_Enter:
         case XK_Return:
             key_event( HPKEY_ENTER, xev );
@@ -2049,6 +2048,7 @@ static void decode_key( XEvent* xev, KeySym sym, char* buf, int buflen )
         case XK_Z:
             key_event( HPKEY_EEX, xev );
             break;
+        case XK_F1:
         case XK_F7:
         case XK_F10:
             close_and_exit();
