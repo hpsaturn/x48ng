@@ -505,7 +505,6 @@ void text_get_event( void )
                 hpkey = HPKEY_DIV;
                 break;
 
-            case KEY_F( 1 ):
             case KEY_ENTER:
             case '\n':
             case ',':
@@ -539,6 +538,7 @@ void text_get_event( void )
                 hpkey = HPKEY_ON;
                 break;
 
+            case KEY_F( 1 ):
             case KEY_F( 7 ):
             case '|':      /* Shift+\ */
             case KEY_SEND: /* Shift+End */
