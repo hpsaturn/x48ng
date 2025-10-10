@@ -3,31 +3,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <termios.h>
 #include <unistd.h>
 
-#include "emulator_inner.h" /* saturn, do_interupt() */
-#include "config.h"         /* config.verbose, config.useTerminal, config.useSerial */
+#include <sys/time.h>
+
+#include "emulate.h"
+#include "options.h" /* config.verbose, config.useTerminal, config.useSerial */
+#include "serial.h"
 
 static int wire_fd;
 static int ir_fd;
 static int ttyp;
 
-char* wire_name = ( char* )0;
-char* ir_name = ( char* )0;
-
-void update_connection_display( void )
+static void update_connection_display( void )
 {
     if ( wire_fd == -1 ) {
-        if ( wire_name )
-            free( wire_name );
-        wire_name = ( char* )0;
+        if ( config.wire_name )
+            free( config.wire_name );
+        config.wire_name = ( char* )0;
     }
     if ( ir_fd == -1 ) {
-        if ( ir_name )
-            free( ir_name );
-        ir_name = ( char* )0;
+        if ( config.ir_name )
+            free( config.ir_name );
+        config.ir_name = ( char* )0;
     }
 }
 
@@ -52,7 +51,7 @@ int init_serial( void )
             if ( ( ttyp = open( tty_dev_name, O_RDWR | O_NDELAY, 0666 ) ) >= 0 ) {
                 if ( config.verbose )
                     printf( "wire connection on %s\n", tty_dev_name );
-                wire_name = strdup( tty_dev_name );
+                config.wire_name = strdup( tty_dev_name );
             }
         }
         /* BSD PTY (Legacy) */
@@ -66,7 +65,7 @@ int init_serial( void )
                         sprintf( tty_dev_name, "/dev/tty%c%x", c, n );
                         if ( config.verbose )
                             printf( "wire connection on %s\n", tty_dev_name );
-                        wire_name = strdup( tty_dev_name );
+                        config.wire_name = strdup( tty_dev_name );
                         break;
                     }
                 }
@@ -118,7 +117,7 @@ int init_serial( void )
         if ( ( ir_fd = open( tty_dev_name, O_RDWR | O_NDELAY ) ) >= 0 ) {
             if ( config.verbose )
                 printf( "IR connection on %s\n", tty_dev_name );
-            ir_name = strdup( tty_dev_name );
+            config.ir_name = strdup( tty_dev_name );
         }
     }
 
@@ -181,7 +180,7 @@ void serial_baud( int baud )
         }
     }
 
-#if !defined( __APPLE__ ) && !defined(__FreeBSD__)
+#if !defined( __APPLE__ ) && !defined( __FreeBSD__ )
 #  pragma GCC diagnostic push                            // save the actual diag context
 #  pragma GCC diagnostic ignored "-Wmaybe-uninitialized" // disable maybe warnings
 #  pragma GCC diagnostic ignored "-Wuninitialized"       // disable maybe warnings
@@ -224,7 +223,7 @@ void serial_baud( int baud )
             break;
     }
 
-#if defined(__FreeBSD__)
+#if defined( __FreeBSD__ )
     if ( ir_fd >= 0 ) {
 #else
     if ( ( ir_fd >= 0 ) && ( ( ttybuf.c_cflag & CBAUD ) == 0 ) ) {

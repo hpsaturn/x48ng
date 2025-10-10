@@ -1,14 +1,15 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <unistd.h>
 
-#include "emulator.h"
-#include "emulator_inner.h"
+#include <sys/time.h>
+
+#include "emulate.h"
+#include "persistence.h"
+#include "memory.h"
+#include "options.h"
 #include "romio.h"
-#include "config.h"
-#include "ui.h" /* ui_disp_draw_nibble(); ui_menu_draw_nibble(); */
+#include "types.h"
 
 #define MCTL_MMIO_SX 0
 #define MCTL_SysRAM_SX 1
@@ -29,6 +30,7 @@
 long nibble_masks[ 16 ] = { 0x0000000f, 0x000000f0, 0x00000f00, 0x0000f000, 0x000f0000, 0x00f00000, 0x0f000000, 0xf0000000,
                             0x0000000f, 0x000000f0, 0x00000f00, 0x0000f000, 0x000f0000, 0x00f00000, 0x0f000000, 0xf0000000 };
 
+int lcd_pixels_buffer[ LCD_WIDTH * LCD_HEIGHT ];
 display_t display;
 
 void ( *write_nibble )( long addr, int val );
@@ -37,13 +39,55 @@ int ( *read_nibble_crc )( long addr );
 
 static int line_counter = -1;
 
+static void disp_draw_nibble( word_20 addr, word_4 val )
+{
+    long offset = ( addr - display.disp_start );
+    int x = offset % display.nibs_per_line;
+
+    int bit_stop;
+    int init_x;
+    int y;
+
+    if ( x < 0 || x > 35 )
+        return;
+    if ( display.nibs_per_line != 0 ) {
+        y = offset / display.nibs_per_line;
+        if ( y < 0 || y > 63 )
+            return;
+
+        init_x = x * NIBBLES_NB_BITS;
+        bit_stop = ( ( init_x + NIBBLES_NB_BITS >= LCD_WIDTH ) ? LCD_WIDTH - init_x : NIBBLES_NB_BITS );
+        for ( int bit_x = 0; bit_x < bit_stop; bit_x++ )
+            lcd_pixels_buffer[ ( y * LCD_WIDTH ) + init_x + bit_x ] = ( val & ( 1 << ( bit_x & 3 ) ) ) > 0 ? 1 : 0;
+    } else {
+        for ( y = 0; y < display.lines; y++ ) {
+            init_x = x * NIBBLES_NB_BITS;
+            bit_stop = ( ( init_x + NIBBLES_NB_BITS >= LCD_WIDTH ) ? LCD_WIDTH - init_x : NIBBLES_NB_BITS );
+            for ( int bit_x = 0; bit_x < bit_stop; bit_x++ )
+                lcd_pixels_buffer[ ( y * LCD_WIDTH ) + init_x + bit_x ] = ( val & ( 1 << ( bit_x & 3 ) ) ) > 0 ? 1 : 0;
+        }
+    }
+}
+
+static void menu_draw_nibble( word_20 addr, word_4 val )
+{
+    long offset = ( addr - display.menu_start );
+    int x = offset % display.nibs_per_line;
+    int y = display.lines + ( offset / display.nibs_per_line ) + 1;
+
+    int init_x = x * NIBBLES_NB_BITS;
+    int bit_stop = ( init_x + NIBBLES_NB_BITS >= LCD_WIDTH ) ? LCD_WIDTH - init_x : NIBBLES_NB_BITS;
+    for ( int bit_x = 0; bit_x < bit_stop; bit_x++ )
+        lcd_pixels_buffer[ ( y * LCD_WIDTH ) + init_x + bit_x ] = ( val & ( 1 << ( bit_x & 3 ) ) );
+}
+
 static inline int calc_crc( int nib )
 {
     saturn.crc = ( saturn.crc >> 4 ) ^ ( ( ( saturn.crc ^ nib ) & 0xf ) * 0x1081 );
     return nib;
 }
 
-void write_dev_mem( long addr, int val )
+static void write_dev_mem( long addr, int val )
 {
     static int old_line_offset = -1;
 
@@ -60,24 +104,20 @@ void write_dev_mem( long addr, int val )
                 else
                     display.nibs_per_line = ( NIBBLES_PER_ROW + saturn.line_offset ) & 0xfff;
                 display.disp_end = display.disp_start + ( display.nibs_per_line * ( display.lines + 1 ) );
-                device.display_touched = DISP_INSTR_OFF;
             }
             return;
         case 0x101: /* CONTRAST CONTROL */
             saturn.contrast_ctrl = val;
             display.contrast &= ~0x0f;
             display.contrast |= val;
-            device.contrast_touched = true;
             return;
-        case 0x102: /* DISPLAY TEST */
+        case 0x102: /* CONTRAST CONTROL */
             display.contrast &= ~0xf0;
             display.contrast |= ( ( val & 0x1 ) << 4 );
-            device.contrast_touched = true;
             /* Fall through */
         case 0x103: /* DISPLAY TEST */
             saturn.disp_test &= ~nibble_masks[ addr - 0x102 ];
             saturn.disp_test |= val << ( ( addr - 0x102 ) * 4 );
-            /* device.disp_test_touched = true; */
             return;
         case 0x104:
         case 0x105:
@@ -88,21 +128,17 @@ void write_dev_mem( long addr, int val )
             return;
         case 0x108: /* POWER STATUS */
             saturn.power_status = val;
-            /* device.power_status_touched = true; */
             return;
         case 0x109: /* POWER CONTROL */
             saturn.power_ctrl = val;
-            /* device.power_ctrl_touched = true; */
             return;
         case 0x10a: /* MODE */
             saturn.mode = val;
-            /* device.mode_touched = true; */
             return;
         case 0x10b:
         case 0x10c: /* ANNUNC */
             saturn.annunc &= ~nibble_masks[ addr - 0x10b ];
             saturn.annunc |= val << ( ( addr - 0x10b ) * 4 );
-            device.ann_touched = true;
             return;
         case 0x10d: /* BAUD */
             saturn.baud = val;
@@ -181,7 +217,6 @@ void write_dev_mem( long addr, int val )
             if ( display.disp_start != ( saturn.disp_addr & 0xffffe ) ) {
                 display.disp_start = saturn.disp_addr & 0xffffe;
                 display.disp_end = display.disp_start + ( display.nibs_per_line * ( display.lines + 1 ) );
-                device.display_touched = DISP_INSTR_OFF;
             }
             return;
         case 0x125:
@@ -196,7 +231,6 @@ void write_dev_mem( long addr, int val )
                 else
                     display.nibs_per_line = ( NIBBLES_PER_ROW + saturn.line_offset ) & 0xfff;
                 display.disp_end = display.disp_start + ( display.nibs_per_line * ( display.lines + 1 ) );
-                device.display_touched = DISP_INSTR_OFF;
             }
             return;
         case 0x128:
@@ -209,7 +243,6 @@ void write_dev_mem( long addr, int val )
                 if ( display.lines == 0 )
                     display.lines = 63;
                 display.disp_end = display.disp_start + ( display.nibs_per_line * ( display.lines + 1 ) );
-                device.display_touched = DISP_INSTR_OFF;
             }
             return;
         case 0x12a:
@@ -238,7 +271,6 @@ void write_dev_mem( long addr, int val )
             if ( display.menu_start != saturn.menu_addr ) {
                 display.menu_start = saturn.menu_addr;
                 display.menu_end = display.menu_start + 0x110;
-                device.display_touched = DISP_INSTR_OFF;
             }
             return;
         case 0x135:
@@ -270,7 +302,7 @@ void write_dev_mem( long addr, int val )
     }
 }
 
-int read_dev_mem( long addr )
+static int read_dev_mem( long addr )
 {
     switch ( ( int )addr ) {
         case 0x100: /* DISPLAY IO */
@@ -385,7 +417,7 @@ int read_dev_mem( long addr )
     }
 }
 
-void write_nibble_sx( long addr, int val )
+static void write_nibble_sx( long addr, int val )
 {
     addr &= 0xfffff;
     val &= 0x0f;
@@ -466,20 +498,17 @@ void write_nibble_sx( long addr, int val )
             return;
     }
 
-    if ( device.display_touched )
-        return;
-
     if ( addr >= display.disp_start && addr < display.disp_end )
-        ui_disp_draw_nibble( addr, val );
+        disp_draw_nibble( addr, val );
 
     if ( display.lines == 63 )
         return;
 
     if ( addr >= display.menu_start && addr < display.menu_end )
-        ui_menu_draw_nibble( addr, val );
+        menu_draw_nibble( addr, val );
 }
 
-void write_nibble_gx( long addr, int val )
+static void write_nibble_gx( long addr, int val )
 {
     addr &= 0xfffff;
     val &= 0x0f;
@@ -616,20 +645,17 @@ void write_nibble_gx( long addr, int val )
             return;
     }
 
-    if ( device.display_touched )
-        return;
-
     if ( addr >= display.disp_start && addr < display.disp_end )
-        ui_disp_draw_nibble( addr, val );
+        disp_draw_nibble( addr, val );
 
     if ( display.lines == 63 )
         return;
 
     if ( addr >= display.menu_start && addr < display.menu_end )
-        ui_menu_draw_nibble( addr, val );
+        menu_draw_nibble( addr, val );
 }
 
-int read_nibble_sx( long addr )
+static int read_nibble_sx( long addr )
 {
     addr &= 0xfffff;
     switch ( ( int )( addr >> 16 ) & 0x0f ) {
@@ -693,7 +719,7 @@ int read_nibble_sx( long addr )
     return 0x00;
 }
 
-int read_nibble_gx( long addr )
+static int read_nibble_gx( long addr )
 {
     addr &= 0xfffff;
     switch ( ( int )( addr >> 16 ) & 0x0f ) {
@@ -835,7 +861,7 @@ int read_nibble_gx( long addr )
     return 0x00;
 }
 
-int read_nibble_crc_sx( long addr )
+static int read_nibble_crc_sx( long addr )
 {
     addr &= 0xfffff;
     switch ( ( int )( addr >> 16 ) & 0x0f ) {
@@ -899,7 +925,7 @@ int read_nibble_crc_sx( long addr )
     return 0x00;
 }
 
-int read_nibble_crc_gx( long addr )
+static int read_nibble_crc_gx( long addr )
 {
     addr &= 0xfffff;
     switch ( ( int )( addr >> 16 ) & 0x0f ) {

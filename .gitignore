@@ -1,4 +1,4 @@
-src/*.o
-src/legacy_tools/*.o
+*.o
 
 dist/x48ng*
+/compile_commands.json

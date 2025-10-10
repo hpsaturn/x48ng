@@ -7,9 +7,9 @@
 #include <sys/time.h>
 
 #include "debugger.h" /* used for in_debugger */
-#include "emulator.h"
-#include "emulator_inner.h"
+#include "emulate.h"
 #include "romio.h"
+#include "timers.h"
 
 #define NB_TIMERS 4
 
@@ -43,18 +43,18 @@ static word_64 zero = 0;
 /*
  * Ticks for THU 01.01.1970 00:00:00
  */
-word_64 unix_0_time = 0x1CF2E8F800000LL;
-word_64 ticks_10_min = 0x00b40000L;
+static word_64 unix_0_time = 0x1CF2E8F800000LL;
+static word_64 ticks_10_min = 0x00b40000L;
 
 /*
  * Will be in saturn_t in the future
  */
-word_64 set_0_time = 0x0;
+static word_64 set_0_time = 0x0;
 
 /*
  * Calculated as (unix_0_time + set_0_time)
  */
-word_64 time_offset = 0x0;
+static word_64 time_offset = 0x0;
 
 /*
  * Set ACCESSTIME: (on startup)

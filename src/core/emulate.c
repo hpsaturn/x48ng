@@ -4,12 +4,14 @@
 #include <sys/time.h>
 
 #include "debugger.h" /* enter_debugger, TRAP_INSTRUCTION, ILLEGAL_INSTRUCTION */
-#include "emulator.h"
-#include "emulator_inner.h"
-#include "config.h" /* throttle */
-#include "ui.h"     /* ui_get_event(); ui_adjust_contrast(); ui_update_LCD(); ui_draw_annunc(); */
+#include "emulate.h"
+#include "memory.h"
+#include "options.h" /* throttle */
+#include "registers.h"
+#include "serial.h"
+#include "timers.h"
 
-#include "debugger.h" /* in_debugger, enter_debugger */
+#include "ui4x/common.h"
 
 /* #define P_FIELD 0  /\* unused? *\/ */
 /* #define WP_FIELD 1 /\* unused? *\/ */
@@ -21,6 +23,7 @@
 #define W_FIELD 7
 #define A_FIELD 15
 #define IN_FIELD 16
+#define OUT_FIELD 17
 #define OUTS_FIELD 18
 
 #define SrvcIoStart 0x3c0
@@ -36,22 +39,17 @@
 
 #define NB_SAMPLES 10
 
-extern long nibble_masks[ 16 ];
-
-saturn_t saturn;
 device_t device;
-
-bool sigalarm_triggered = false;
-bool device_check = false;
-bool adj_time_pending = false;
-
 int set_t1;
-
 long schedule_event = 0;
 long sched_adjtime = SCHED_ADJTIME;
+bool adj_time_pending = false;
+bool device_check = false;
+
+saturn_t saturn;
+bool sigalarm_triggered = false;
 long sched_timer1 = SCHED_TIMER1;
 long sched_timer2 = SCHED_TIMER2;
-
 unsigned long t1_i_per_tick;
 unsigned long t2_i_per_tick;
 
@@ -71,7 +69,6 @@ static unsigned long delta_i;
 static long sched_instr_rollover = SCHED_INSTR_ROLLOVER;
 static long sched_receive = SCHED_RECEIVE;
 static long sched_statistics = SCHED_STATISTICS;
-static long sched_display = SCHED_NEVER;
 
 /* used in step_instruction_* */
 static word_20 jumpmasks[] = { 0xffffffff, 0xfffffff0, 0xffffff00, 0xfffff000, 0xffff0000, 0xfff00000, 0xff000000, 0xf0000000 };
@@ -145,22 +142,6 @@ static inline void clear_register_bit( unsigned char* reg, int n ) { reg[ n / 4 
 
 static inline int get_register_bit( unsigned char* reg, int n ) { return ( ( int )( reg[ n / 4 ] & ( 1 << ( n % 4 ) ) ) > 0 ) ? 1 : 0; }
 
-void do_interupt( void )
-{
-    interrupt_called = true;
-    if ( saturn.interruptable ) {
-        push_return_addr( saturn.PC );
-        saturn.PC = 0xf;
-        saturn.interruptable = false;
-    }
-}
-
-void do_kbd_int( void )
-{
-    do_interupt();
-    if ( !saturn.interruptable )
-        saturn.int_pending = true;
-}
 
 static inline void load_constant( unsigned char* reg, int n, long addr )
 {
@@ -239,14 +220,6 @@ static inline void recall_n( unsigned char* reg, word_20 dat, int n )
 {
     for ( int i = 0; i < n; i++ )
         reg[ i ] = read_nibble_crc( dat++ );
-}
-
-void load_addr( word_20* dat, long addr, int n )
-{
-    for ( int i = 0; i < n; i++ ) {
-        *dat &= ~nibble_masks[ i ];
-        *dat |= read_nibble( addr + i ) << ( i * 4 );
-    }
 }
 
 static bool step_instruction_00e( void )
@@ -1255,51 +1228,6 @@ static bool step_instruction_080( void )
             if ( config.inhibit_shutdown )
                 break;
 
-            /***************************/
-            /* hpemu/src/opcodes.c:367 */
-            /***************************/
-            /* static void op807( byte* opc ) // SHUTDN */
-            /* { */
-            /*     // TODO: Fix SHUTDN */
-            /*     if ( !cpu.in[ 0 ] && !cpu.in[ 1 ] && !cpu.in[ 3 ] ) { */
-            /*         cpu.shutdown = true; */
-            /*     } */
-            /*     cpu.pc += 3; */
-            /*     cpu.cycles += 5; */
-            /* } */
-
-            /***********************************/
-            /* saturn_bertolotti/src/cpu.c:364 */
-            /***********************************/
-            /* static void ExecSHUTDN( void ) */
-            /* { */
-            /*     debug1( DEBUG_C_TRACE, CPU_I_CALLED, "SHUTDN" ); */
-
-            /* #ifdef CPU_SPIN_SHUTDN */
-            /*     /\* If the CPU_SPIN_SHUTDN symbol is defined, the CPU module implements */
-            /*        SHUTDN as a spin loop; the program counter is reset to the starting */
-            /*        nibble of the SHUTDN opcode. */
-            /*     *\/ */
-            /*     cpu_status.PC -= 3; */
-            /* #endif */
-
-            /*     /\* Set shutdown flag *\/ */
-            /*     cpu_status.shutdn = 1; */
-
-            /* #ifndef CPU_SPIN_SHUTDN */
-            /*     /\* If the CPU_SPIN_SHUTDN symbol is not defined, the CPU module implements */
-            /*        SHUTDN signalling the condition CPU_I_SHUTDN */
-            /*     *\/ */
-            /*     ChfCondition CPU_I_SHUTDN, CHF_INFO ChfEnd; */
-            /*     ChfSignal(); */
-            /* #endif */
-            /* } */
-
-            if ( device.display_touched ) {
-                device.display_touched = 0;
-                ui_refresh_LCD();
-            }
-
             stop_timer( RUN_TIMER );
             start_timer( IDLE_TIMER );
 
@@ -1318,7 +1246,7 @@ static bool step_instruction_080( void )
                     if ( sigalarm_triggered ) {
                         sigalarm_triggered = false;
 
-                        ui_refresh_LCD();
+                        ui_update_display();
 
                         ticks = get_t1_t2();
                         if ( saturn.t2_ctrl & 0x01 )
@@ -2754,6 +2682,34 @@ static bool step_instruction_0f( void )
     return illegal_instruction;
 }
 
+/**********/
+/* public */
+/**********/
+void do_interupt( void )
+{
+    interrupt_called = true;
+    if ( saturn.interruptable ) {
+        push_return_addr( saturn.PC );
+        saturn.PC = 0xf;
+        saturn.interruptable = false;
+    }
+}
+
+void do_kbd_int( void )
+{
+    do_interupt();
+    if ( !saturn.interruptable )
+        saturn.int_pending = true;
+}
+
+void load_addr( word_20* dat, long addr, int n )
+{
+    for ( int i = 0; i < n; i++ ) {
+        *dat &= ~nibble_masks[ i ];
+        *dat |= read_nibble( addr + i ) << ( i * 4 );
+    }
+}
+
 void step_instruction( void )
 {
     bool illegal_instruction = false;
@@ -2845,30 +2801,8 @@ void schedule( void )
 
     if ( device_check ) {
         device_check = false;
-        if ( ( sched_display -= steps ) <= 0 ) {
-            if ( device.display_touched )
-                device.display_touched -= steps;
-            if ( device.display_touched < 0 )
-                device.display_touched = 1;
-        }
 
         /* check_device() */
-        /* UI */
-        // TODO: move this out into ui_*.c
-        if ( device.display_touched > 0 && device.display_touched-- == 1 ) {
-            device.display_touched = 0;
-            ui_update_LCD();
-        }
-        if ( device.display_touched > 0 )
-            device_check = true;
-        if ( device.contrast_touched ) {
-            device.contrast_touched = false;
-            ui_adjust_contrast();
-        }
-        if ( device.ann_touched ) {
-            device.ann_touched = false;
-            ui_draw_annunc();
-        }
 
         /* serial */
         if ( device.baud_touched ) {
@@ -2906,14 +2840,6 @@ void schedule( void )
             device.t2_touched = false;
         }
         /* end check_device() */
-
-        sched_display = SCHED_NEVER;
-        if ( device.display_touched ) {
-            if ( device.display_touched < sched_display )
-                sched_display = device.display_touched - 1;
-            if ( sched_display < schedule_event )
-                schedule_event = sched_display;
-        }
     }
 
     if ( ( sched_receive -= steps ) <= 0 ) {
@@ -3011,7 +2937,7 @@ void schedule( void )
     if ( sigalarm_triggered ) {
         sigalarm_triggered = false;
 
-        ui_refresh_LCD();
+        ui_update_display();
         ui_get_event();
     }
 }

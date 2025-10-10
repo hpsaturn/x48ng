@@ -1,57 +1,50 @@
-#ifndef _CONFIG_H
-#define _CONFIG_H 1
+#ifndef _OPTIONS_H
+#  define _OPTIONS_H 1
 
-#include <stdbool.h>
+#  include <stdbool.h>
 
-#define FRONTEND_TEXT 0
-#define FRONTEND_X11 1
-#define FRONTEND_SDL2 2
+typedef enum { FRONTEND_SDL, FRONTEND_NCURSES, FRONTEND_GTK } frontend_t;
+
+typedef enum { MODEL_48SX = 485, MODEL_48GX = 486, MODEL_40G = 406, MODEL_49G = 496, MODEL_50G = 506 } model_t;
 
 typedef struct {
     char* progname;
 
+    model_t model;
     bool verbose;
+    bool shiftless;
+    bool big_screen;
+    bool black_lcd;
+
+    frontend_t frontend;
+    bool mono;
+    bool gray;
+
+    /* sdl */
+    bool chromeless;
+    bool fullscreen;
+    double scale;
+
+    /* tui */
+    bool tiny;
+    bool small;
+
+    char* wire_name;
+    char* ir_name;
+
     bool print_config;
     bool useTerminal;
     bool useSerial;
     bool useDebugger;
     bool throttle;
     bool resetOnStartup;
-    int frontend_type;
-
-    char* serialLine;
-
-    bool leave_shift_keys;
     bool inhibit_shutdown;
 
-    bool mono;
-    bool gray;
-
-    /* tui */
-    bool small;
-    bool tiny;
-
-    /* sdl */
-    bool hide_chrome;
-    bool show_ui_fullscreen;
-    double scale;
-
-    /* x11 */
-    bool netbook;
-    char* name;
-    char* title;
-    char* x11_visual;
-    bool monoIcon;
-    bool iconic;
-    bool xrm;
-    char* smallFont;
-    char* mediumFont;
-    char* largeFont;
-    char* connFont;
+    char* serialLine;
 } config_t;
 extern config_t config;
 
-#define MAX_LENGTH_FILENAME 2048
+#  define MAX_LENGTH_FILENAME 2048
 extern char normalized_config_path[ MAX_LENGTH_FILENAME ];
 extern char normalized_config_file[ MAX_LENGTH_FILENAME ];
 extern char normalized_rom_path[ MAX_LENGTH_FILENAME ];
@@ -63,6 +56,6 @@ extern char normalized_port2_path[ MAX_LENGTH_FILENAME ];
 /*************/
 /* functions */
 /*************/
-extern int config_init( int argc, char* argv[] );
+extern config_t* config_init( int argc, char* argv[] );
 
-#endif /* !_CONFIG_H */
+#endif /* !_OPTIONS_H */
