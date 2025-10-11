@@ -141,8 +141,36 @@ bool get_display_state( void ) { return display.on; }
 
 void get_lcd_buffer( int* target )
 {
-    for ( int xy = 0; xy < ( LCD_HEIGHT * LCD_WIDTH ); ++xy )
-        target[ xy ] = lcd_pixels_buffer[ xy ] > 0 ? 3 : 0;
+    Address addr = display.disp_start; // mod_status.hdw.lcd_base_addr;
+    int x, y;
+    Nibble v;
+
+    /* Scan active display rows */
+    for ( y = 0; y <= display.lines /* mod_status.hdw.lcd_vlc */; y++ ) {
+        /* Scan columns */
+        for ( x = 0; x < NIBBLES_PER_ROW; x++ ) {
+            v = bus_fetch_nibble( addr++ );
+
+            // split nibble
+            for ( int nx = 0; nx < 4; nx++ )
+                target[ ( y * LCD_WIDTH ) + ( x * 4 ) + nx ] = ( v & ( 1 << ( nx & 3 ) ) ) > 0 ? 1 : 0;
+        }
+
+        addr += display.offset; // mod_status.hdw.lcd_line_offset;
+    }
+
+    /* Scan menu display rows */
+    addr = display.menu_start; // mod_status.hdw.lcd_menu_addr;
+    for ( ; y < LCD_HEIGHT; y++ ) {
+        /* Scan columns */
+        for ( x = 0; x < NIBBLES_PER_ROW; x++ ) {
+            v = bus_fetch_nibble( addr++ );
+
+            // split nibble
+            for ( int nx = 0; nx < 4; nx++ )
+                target[ ( y * LCD_WIDTH ) + ( x * 4 ) + nx ] = ( v & ( 1 << ( nx & 3 ) ) ) > 0 ? 1 : 0;
+        }
+    }
 }
 
 int get_contrast( void ) { return display.contrast; }
