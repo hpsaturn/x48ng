@@ -163,16 +163,16 @@ static inline void ncurses_draw_lcd_small( void )
     for ( int y = 0; y < LCD_HEIGHT; y += step_y ) {
         wcscpy( line, L"" );
 
-        for ( int x = 0; x < LCD_WIDTH; x += step_x ) {
-            top_left = display_buffer_grayscale[ ( y * LCD_WIDTH ) + x ] > 0 ? 1 : 0;
-            top_right = display_buffer_grayscale[ ( y * LCD_WIDTH ) + x + 1 ] > 0 ? 1 : 0;
-            bottom_left = display_buffer_grayscale[ ( ( y + 1 ) * LCD_WIDTH ) + x ] > 0 ? 1 : 0;
-            bottom_right = display_buffer_grayscale[ ( ( y + 1 ) * LCD_WIDTH ) + x + 1 ] > 0 ? 1 : 0;
+        for ( int x = 0; x < LCD_WIDTH-1; x += step_x ) {
+            top_left = display_buffer_grayscale[ ( y * LCD_WIDTH-1 ) + x ] > 0 ? 1 : 0;
+            top_right = display_buffer_grayscale[ ( y * LCD_WIDTH-1 ) + x + 1 ] > 0 ? 1 : 0;
+            bottom_left = display_buffer_grayscale[ ( ( y + 1 ) * LCD_WIDTH-1 ) + x ] > 0 ? 1 : 0;
+            bottom_right = display_buffer_grayscale[ ( ( y + 1 ) * LCD_WIDTH-1 ) + x + 1 ] > 0 ? 1 : 0;
 
             wchar_t pixels = four_bits_to_quadrant_char( top_left, top_right, bottom_left, bottom_right );
             wcsncat( line, &pixels, 1 );
         }
-        mvwaddwstr( lcd_window, LCD_OFFSET_Y + ( y / step_y ), LCD_OFFSET_X, line );
+        mvwaddwstr( lcd_window,LCD_OFFSET_Y + ( y / step_y ), LCD_OFFSET_X-1, line );
     }
 
     if ( !__config.mono && has_colors() )
