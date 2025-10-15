@@ -1,21 +1,21 @@
+#include <assert.h>
 #include <errno.h>
+#include <getopt.h>
 #include <pwd.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <unistd.h>
-#include <stdbool.h>
-#include <assert.h>
 
-#include <getopt.h>
+#include <sys/stat.h>
 
-#include <lua.h>
 #include <lauxlib.h>
+#include <lua.h>
 
-#include "config.h"
+#include "options.h"
 
-config_t config = {
+static config_t __config = {
     .progname = ( char* )"x48ng",
 
     .verbose = false,
@@ -28,38 +28,25 @@ config_t config = {
 
     .serialLine = NULL,
 
-    .frontend_type = FRONTEND_TEXT,
+    .frontend = FRONTEND_NCURSES,
 
-    .leave_shift_keys = false,
+    .shiftless = false,
     .inhibit_shutdown = false,
 
     .mono = false,
     .gray = false,
+
+    .big_screen = false,
+    .black_lcd = false,
 
     /* tui */
     .small = false,
     .tiny = false,
 
     /* sdl */
-    .hide_chrome = false,
-    .show_ui_fullscreen = false,
+    .chromeless = false,
+    .fullscreen = false,
     .scale = 1.0,
-
-    /* x11 */
-    .netbook = false,
-    .name = ( char* )"x48ng",
-    .title = ( char* )"x48ng",
-    .x11_visual = NULL,
-    /* default | staticgray | staticcolor | truecolor | grayscale |
-     * pseudocolor | directcolor | 0xnn | nn
-     */
-    .monoIcon = false,
-    .iconic = false,
-    .xrm = true,
-    .smallFont = NULL,
-    .mediumFont = NULL,
-    .largeFont = NULL,
-    .connFont = NULL,
 };
 
 char* configDir = ( char* )"x48ng";
@@ -146,7 +133,7 @@ static inline void get_absolute_config_dir( char* source, char* dest )
         char* xdg_config_home = getenv( "XDG_CONFIG_HOME" );
 
         if ( xdg_config_home ) {
-            if ( config.verbose )
+            if ( __config.verbose )
                 fprintf( stderr, "XDG_CONFIG_HOME is %s\n", xdg_config_home );
 
             strcpy( dest, xdg_config_home );
@@ -155,7 +142,7 @@ static inline void get_absolute_config_dir( char* source, char* dest )
             char* home = getenv( "HOME" );
 
             if ( home ) {
-                if ( config.verbose )
+                if ( __config.verbose )
                     fprintf( stderr, "HOME is %s\n", home );
 
                 strcpy( dest, home );
@@ -164,13 +151,13 @@ static inline void get_absolute_config_dir( char* source, char* dest )
                 struct passwd* pwd = getpwuid( getuid() );
 
                 if ( pwd ) {
-                    if ( config.verbose )
+                    if ( __config.verbose )
                         fprintf( stderr, "pwd->pw_dir is %s\n", pwd->pw_dir );
 
                     strcpy( dest, pwd->pw_dir );
                     strcat( dest, "/" );
                 } else {
-                    if ( config.verbose )
+                    if ( __config.verbose )
                         fprintf( stderr, "can\'t figure out your home directory, "
                                          "trying /tmp\n" );
 
@@ -200,7 +187,7 @@ static inline bool normalize_config_dir( void )
     struct stat st;
 
     get_absolute_config_dir( configDir, normalized_config_path );
-    if ( config.verbose )
+    if ( __config.verbose )
         fprintf( stderr, "normalized_config_path: %s\n", normalized_config_path );
 
     if ( stat( normalized_config_path, &st ) == -1 )
@@ -221,7 +208,7 @@ static inline void normalize_filenames( void )
     normalize_filename( port2FileName, normalized_port2_path );
 }
 
-int config_init( int argc, char* argv[] )
+config_t* config_init( int argc, char* argv[] )
 {
     int option_index;
     int c = '?';
@@ -233,79 +220,69 @@ int config_init( int argc, char* argv[] )
     char* clopt_port1FileName = NULL;
     char* clopt_port2FileName = NULL;
     char* clopt_serialLine = NULL;
-    char* clopt_x11_visual = NULL;
-    char* clopt_smallFont = NULL;
-    char* clopt_mediumFont = NULL;
-    char* clopt_largeFont = NULL;
-    char* clopt_connFont = NULL;
-    int clopt_frontend_type = -1;
+    int clopt_frontend = -1;
     int clopt_verbose = -1;
     int clopt_useTerminal = -1;
     int clopt_useSerial = -1;
     int clopt_useDebugger = -1;
     int clopt_throttle = -1;
-    int clopt_hide_chrome = -1;
-    int clopt_show_ui_fullscreen = -1;
+    int clopt_chromeless = -1;
+    int clopt_fullscreen = -1;
     double clopt_scale = -1.0;
-    int clopt_netbook = -1;
     int clopt_mono = -1;
     int clopt_gray = -1;
     int clopt_small = -1;
     int clopt_tiny = -1;
-    int clopt_leave_shift_keys = -1;
+    int clopt_shiftless = -1;
     int clopt_inhibit_shutdown = -1;
+    int clopt_black_lcd = -1;
 
     const char* optstring = "c:hvVtsirT";
     struct option long_options[] = {
-        {"config",           required_argument, NULL,                           'c'          },
-        {"config-dir",       required_argument, NULL,                           1000         },
-        {"rom",              required_argument, NULL,                           1010         },
-        {"ram",              required_argument, NULL,                           1011         },
-        {"state",            required_argument, NULL,                           1012         },
-        {"port1",            required_argument, NULL,                           1013         },
-        {"port2",            required_argument, NULL,                           1014         },
+        {"help",             no_argument,       NULL,                             'h'         },
+        {"version",          no_argument,       NULL,                             'v'         },
+        {"verbose",          no_argument,       &clopt_verbose,                   true        },
+        {"print-config",     no_argument,       ( int* )&__config.print_config,   true        },
 
-        {"serial-line",      required_argument, NULL,                           1015         },
+        {"throttle",         no_argument,       &clopt_throttle,                  true        },
+        {"reset",            no_argument,       ( int* )&__config.resetOnStartup, true        },
 
-        {"help",             no_argument,       NULL,                           'h'          },
-        {"version",          no_argument,       NULL,                           'v'          },
+        {"config",           required_argument, NULL,                             'c'         },
+        {"config-dir",       required_argument, NULL,                             1000        },
+        {"rom",              required_argument, NULL,                             1010        },
+        {"ram",              required_argument, NULL,                             1011        },
+        {"state",            required_argument, NULL,                             1012        },
+        {"port1",            required_argument, NULL,                             1013        },
+        {"port2",            required_argument, NULL,                             1014        },
 
-        {"print-config",     no_argument,       ( int* )&config.print_config,   true         },
-        {"verbose",          no_argument,       &clopt_verbose,                 true         },
-        {"terminal",         no_argument,       &clopt_useTerminal,             true         },
-        {"serial",           no_argument,       &clopt_useSerial,               true         },
+        {"serial-line",      required_argument, NULL,                             1015        },
 
-        {"reset",            no_argument,       ( int* )&config.resetOnStartup, true         },
-        {"throttle",         no_argument,       &clopt_throttle,                true         },
+        {"terminal",         no_argument,       &clopt_useTerminal,               true        },
+        {"serial",           no_argument,       &clopt_useSerial,                 true        },
 
-        {"debug",            no_argument,       &clopt_useDebugger,             true         },
+        {"debug",            no_argument,       &clopt_useDebugger,               true        },
 
-        {"sdl2",             no_argument,       &clopt_frontend_type,           FRONTEND_SDL2},
-        {"sdl",              no_argument,       &clopt_frontend_type,           FRONTEND_SDL2},
-        {"no-chrome",        no_argument,       &clopt_hide_chrome,             true         },
-        {"fullscreen",       no_argument,       &clopt_show_ui_fullscreen,      true         },
-        {"scale",            required_argument, NULL,                           7110         },
+        {"sdl2",             no_argument,       &clopt_frontend,                  FRONTEND_SDL}, /* DEPRECATED */
+        {"sdl",              no_argument,       &clopt_frontend,                  FRONTEND_SDL},
+        {"no-chrome",        no_argument,       &clopt_chromeless,                true        }, /* DEPRECATED */
+        {"chromeless",       no_argument,       &clopt_chromeless,                true        },
+        {"fullscreen",       no_argument,       &clopt_fullscreen,                true        },
+        {"scale",            required_argument, NULL,                             7110        },
+        {"black-lcd",        no_argument,       &clopt_black_lcd,                 true        },
 
-        {"x11",              no_argument,       &clopt_frontend_type,           FRONTEND_X11 },
-        {"netbook",          no_argument,       &clopt_netbook,                 true         },
-        {"visual",           required_argument, NULL,                           8110         },
-        {"small-font",       required_argument, NULL,                           8111         },
-        {"medium-font",      required_argument, NULL,                           8112         },
-        {"large-font",       required_argument, NULL,                           8113         },
-        {"connection-font",  required_argument, NULL,                           8114         },
+        {"tui",              no_argument,       NULL,                             9100        },
+        {"tui-small",        no_argument,       NULL,                             9110        },
+        {"tui-tiny",         no_argument,       NULL,                             9120        },
+        {"small",            no_argument,       NULL,                             9109        }, /* DEPRECATED */
+        {"tiny",             no_argument,       NULL,                             9119        }, /* DEPRECATED */
 
-        {"tui",              no_argument,       NULL,                           9100         },
-        {"tui-small",        no_argument,       NULL,                           9110         },
-        {"tui-tiny",         no_argument,       NULL,                           9120         },
-        {"small",            no_argument,       NULL,                           9109         }, /* DEPRECATED */
-        {"tiny",             no_argument,       NULL,                           9119         }, /* DEPRECATED */
+        {"mono",             no_argument,       &clopt_mono,                      true        },
+        {"gray",             no_argument,       &clopt_gray,                      true        },
+        {"leave-shift-keys", no_argument,       &clopt_shiftless,                 true        }, /* DEPRECATED */
+        {"shiftless",        no_argument,       &clopt_shiftless,                 true        },
+        {"inhibit-shutdown", no_argument,       &clopt_inhibit_shutdown,          true        },
 
-        {"mono",             no_argument,       &clopt_mono,                    true         },
-        {"gray",             no_argument,       &clopt_gray,                    true         },
-        {"leave-shift-keys", no_argument,       &clopt_leave_shift_keys,        true         },
-        {"inhibit-shutdown", no_argument,       &clopt_inhibit_shutdown,        true         },
-
-        {0,                  0,                 0,                              0            }
+        {0,                  0,                 0,                                0           }
     };
 
     const char* help_text = "usage: %s [options]\n"
@@ -330,44 +307,29 @@ int config_init( int argc, char* argv[] )
                             "     --serial-line=<path> use <path> as serial device default: "
                             "%s)\n"
                             "  -V --verbose            be verbose (default: false)\n"
-                            "     --x11                use X11 front-end (default: true)\n"
-                            "     --sdl2               use SDL2 front-end (default: false)\n"
+                            "     --sdl                use SDL2 front-end (default: false)\n"
                             "     --tui                use text front-end (default: false)\n"
                             "     --tui-small          use text small front-end (2×2 pixels per character) (default: "
                             "false)\n"
                             "     --tui-tiny           use text tiny front-end (2×4 pixels per character) (default: "
                             "false)\n"
-                            "  -t --use-terminal       activate pseudo terminal interface (default: "
+                            "  -t --terminal           activate pseudo terminal interface (default: "
                             "true)\n"
-                            "  -s --use-serial         activate serial interface (default: false)\n"
+                            "  -s --serial             activate serial interface (default: false)\n"
                             "     --debug              enable the debugger\n"
                             "  -r --reset              perform a reset on startup\n"
                             "  -T --throttle           try to emulate real speed (default: false)\n"
-                            "     --no-chrome          only display the LCD (default: "
+                            "     --chromeless         only display the LCD (default: "
                             "false)\n"
                             "     --fullscreen         make the UI fullscreen "
                             "(default: false)\n"
                             "     --scale=<number>     make the UI scale <number> times "
                             "(default: 1.0)\n"
-                            "     --netbook            make the UI horizontal (default: "
-                            "false)\n"
-                            "     --visual=<X visual>  use x11 visual <X visual> (default: "
-                            "default), possible values: "
-                            "<default | staticgray | staticcolor | truecolor | grayscale | "
-                            "pseudocolor | directcolor | 0xnn | nn>\n"
-                            "     --small-font=<font>  use <X font name> as small "
-                            "font (default: %s)\n"
-                            "     --medium-font=<font> use <X font name> as medium "
-                            "font (default: %s)\n"
-                            "     --large-font=<font>  use <X font name> as large "
-                            "font (default: %s)\n"
-                            "     --connection-font=<font> use <X font name> as "
-                            "connection font (default: %s)\n"
                             "     --mono               make the UI monochrome (default: "
                             "false)\n"
                             "     --gray               make the UI grayscale (default: "
                             "false)\n"
-                            "     --leave-shift-keys   _not_ mapping the shift keys to let them free for numbers (default: "
+                            "     --shiftless          _not_ mapping the shift keys to let them free for numbers (default: "
                             "false)\n"
                             "     --inhibit-shutdown   __tentative fix for stuck-on-OFF bug__ (default: "
                             "false)\n";
@@ -376,12 +338,11 @@ int config_init( int argc, char* argv[] )
 
         switch ( c ) {
             case 'h':
-                fprintf( stderr, help_text, config.progname, config.serialLine, config.smallFont, config.mediumFont, config.largeFont,
-                         config.connFont );
+                fprintf( stderr, help_text, __config.progname, __config.serialLine );
                 exit( 0 );
                 break;
             case 'v':
-                fprintf( stderr, "%s %d.%d.%d\n", config.progname, VERSION_MAJOR, VERSION_MINOR, PATCHLEVEL );
+                fprintf( stderr, "%s %d.%d.%d\n", __config.progname, VERSION_MAJOR, VERSION_MINOR, PATCHLEVEL );
                 exit( 0 );
                 break;
             case 'c':
@@ -411,23 +372,8 @@ int config_init( int argc, char* argv[] )
             case 7110:
                 clopt_scale = atof( optarg );
                 break;
-            case 8110:
-                clopt_x11_visual = optarg;
-                break;
-            case 8111:
-                clopt_smallFont = optarg;
-                break;
-            case 8112:
-                clopt_mediumFont = optarg;
-                break;
-            case 8113:
-                clopt_largeFont = optarg;
-                break;
-            case 8114:
-                clopt_connFont = optarg;
-                break;
             case 9100:
-                clopt_frontend_type = FRONTEND_TEXT;
+                clopt_frontend = FRONTEND_NCURSES;
                 clopt_small = false;
                 clopt_tiny = false;
                 break;
@@ -435,7 +381,7 @@ int config_init( int argc, char* argv[] )
                 fprintf( stdout, "`--small` is deprecated, please use `--tui-small` instead of `--tui --small`" );
                 /* break; */ /* intentional fall-through */
             case 9110:
-                clopt_frontend_type = FRONTEND_TEXT;
+                clopt_frontend = FRONTEND_NCURSES;
                 clopt_small = true;
                 clopt_tiny = false;
                 break;
@@ -443,7 +389,7 @@ int config_init( int argc, char* argv[] )
                 fprintf( stdout, "`--tiny` is deprecated, please use `--tui-tiny` instead of `--tui --tiny`" );
                 /* break; */ /* intentional fall-through */
             case 9120:
-                clopt_frontend_type = FRONTEND_TEXT;
+                clopt_frontend = FRONTEND_NCURSES;
                 clopt_small = false;
                 clopt_tiny = true;
                 break;
@@ -457,7 +403,7 @@ int config_init( int argc, char* argv[] )
                 clopt_useSerial = true;
                 break;
             case 'r':
-                config.resetOnStartup = true;
+                __config.resetOnStartup = true;
                 break;
             case 'T':
                 clopt_throttle = true;
@@ -491,8 +437,8 @@ int config_init( int argc, char* argv[] )
         fprintf( stderr, "Continuing using default configuration as printed below.\n\n" );
 
         fprintf( stderr, "You can solve this by running `mkdir -p %s && %s --print-config >> %s`\n\n", normalized_config_path,
-                 config.progname, normalized_config_file );
-        config.print_config = true;
+                 __config.progname, normalized_config_file );
+        __config.print_config = true;
     }
 
     lua_getglobal( config_lua_values, "config_dir" );
@@ -514,99 +460,80 @@ int config_init( int argc, char* argv[] )
     port2FileName = ( char* )luaL_optstring( config_lua_values, -1, "port2" );
 
     lua_getglobal( config_lua_values, "serial_line" );
-    config.serialLine = ( char* )luaL_optstring( config_lua_values, -1, "/dev/ttyS0" );
+    __config.serialLine = ( char* )luaL_optstring( config_lua_values, -1, "/dev/ttyS0" );
 
     lua_getglobal( config_lua_values, "pseudo_terminal" );
-    config.useTerminal = lua_toboolean( config_lua_values, -1 );
+    __config.useTerminal = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "serial" );
-    config.useSerial = lua_toboolean( config_lua_values, -1 );
+    __config.useSerial = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "debugger" );
-    config.useDebugger = lua_toboolean( config_lua_values, -1 );
+    __config.useDebugger = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "throttle" );
-    config.throttle = lua_toboolean( config_lua_values, -1 );
+    __config.throttle = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "frontend" );
-#ifdef HAS_X11
-#  define DEFAULT_FRONTEND "x11"
-#elif HAS_SDL2
+#ifdef HAS_SDL
 #  define DEFAULT_FRONTEND "sdl2"
 #else
 #  define DEFAULT_FRONTEND "tui"
 #endif
     const char* svalue = luaL_optstring( config_lua_values, -1, DEFAULT_FRONTEND );
     if ( svalue != NULL ) {
-        if ( strcmp( svalue, "x11" ) == 0 )
-            config.frontend_type = FRONTEND_X11;
         if ( strcmp( svalue, "sdl2" ) == 0 )
-            config.frontend_type = FRONTEND_SDL2;
+            __config.frontend = FRONTEND_SDL;
         if ( strcmp( svalue, "sdl" ) == 0 ) /* retro-compatibility */
-            config.frontend_type = FRONTEND_SDL2;
+            __config.frontend = FRONTEND_SDL;
         if ( strcmp( svalue, "tui" ) == 0 ) {
-            config.frontend_type = FRONTEND_TEXT;
-            config.small = false;
-            config.tiny = false;
+            __config.frontend = FRONTEND_NCURSES;
+            __config.small = false;
+            __config.tiny = false;
         }
         if ( strcmp( svalue, "tui-small" ) == 0 ) {
-            config.frontend_type = FRONTEND_TEXT;
-            config.small = true;
-            config.tiny = false;
+            __config.frontend = FRONTEND_NCURSES;
+            __config.small = true;
+            __config.tiny = false;
         }
         if ( strcmp( svalue, "tui-tiny" ) == 0 ) {
-            config.frontend_type = FRONTEND_TEXT;
-            config.small = false;
-            config.tiny = true;
+            __config.frontend = FRONTEND_NCURSES;
+            __config.small = false;
+            __config.tiny = true;
         }
     }
 
+    /* DEPRECATED */
     lua_getglobal( config_lua_values, "hide_chrome" );
-    config.hide_chrome = lua_toboolean( config_lua_values, -1 );
+    __config.chromeless = lua_toboolean( config_lua_values, -1 );
+
+    /* DEPRECATED */
+    lua_getglobal( config_lua_values, "leave_shift_keys" );
+    __config.shiftless = lua_toboolean( config_lua_values, -1 );
+
+    lua_getglobal( config_lua_values, "chromeless" );
+    __config.chromeless = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "fullscreen" );
-    config.show_ui_fullscreen = lua_toboolean( config_lua_values, -1 );
+    __config.fullscreen = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "scale" );
-    config.scale = luaL_optnumber( config_lua_values, -1, 1.0 );
-
-    lua_getglobal( config_lua_values, "netbook" );
-    config.netbook = lua_toboolean( config_lua_values, -1 );
+    __config.scale = luaL_optnumber( config_lua_values, -1, 1.0 );
 
     lua_getglobal( config_lua_values, "mono" );
-    config.mono = lua_toboolean( config_lua_values, -1 );
+    __config.mono = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "gray" );
-    config.gray = lua_toboolean( config_lua_values, -1 );
+    __config.gray = lua_toboolean( config_lua_values, -1 );
 
-    /* DEPRECATED */
-    lua_getglobal( config_lua_values, "small" );
-    config.small = lua_toboolean( config_lua_values, -1 );
+    lua_getglobal( config_lua_values, "black_lcd" );
+    __config.black_lcd = lua_toboolean( config_lua_values, -1 );
 
-    /* DEPRECATED */
-    lua_getglobal( config_lua_values, "tiny" );
-    config.tiny = lua_toboolean( config_lua_values, -1 );
-
-    lua_getglobal( config_lua_values, "leave_shift_keys" );
-    config.leave_shift_keys = lua_toboolean( config_lua_values, -1 );
+    lua_getglobal( config_lua_values, "shiftless" );
+    __config.shiftless = lua_toboolean( config_lua_values, -1 );
 
     lua_getglobal( config_lua_values, "inhibit_shutdown" );
-    config.inhibit_shutdown = lua_toboolean( config_lua_values, -1 );
-
-    lua_getglobal( config_lua_values, "x11_visual" );
-    config.x11_visual = ( char* )luaL_optstring( config_lua_values, -1, "default" );
-
-    lua_getglobal( config_lua_values, "font_small" );
-    config.smallFont = ( char* )luaL_optstring( config_lua_values, -1, "-*-fixed-bold-r-normal-*-14-*-*-*-*-*-iso8859-1" );
-
-    lua_getglobal( config_lua_values, "font_medium" );
-    config.mediumFont = ( char* )luaL_optstring( config_lua_values, -1, "-*-fixed-bold-r-normal-*-15-*-*-*-*-*-iso8859-1" );
-
-    lua_getglobal( config_lua_values, "font_large" );
-    config.largeFont = ( char* )luaL_optstring( config_lua_values, -1, "-*-fixed-medium-r-normal-*-20-*-*-*-*-*-iso8859-1" );
-
-    lua_getglobal( config_lua_values, "font_devices" );
-    config.connFont = ( char* )luaL_optstring( config_lua_values, -1, "-*-fixed-medium-r-normal-*-12-*-*-*-*-*-iso8859-1" );
+    __config.inhibit_shutdown = lua_toboolean( config_lua_values, -1 );
 
     /****************************************************/
     /* 2. treat command-line params which have priority */
@@ -624,50 +551,40 @@ int config_init( int argc, char* argv[] )
     if ( clopt_port2FileName != NULL )
         port2FileName = strdup( clopt_port2FileName );
     if ( clopt_serialLine != NULL )
-        config.serialLine = strdup( clopt_serialLine );
-    if ( clopt_x11_visual != NULL )
-        config.x11_visual = strdup( clopt_x11_visual );
-    if ( clopt_smallFont != NULL )
-        config.smallFont = strdup( clopt_smallFont );
-    if ( clopt_mediumFont != NULL )
-        config.mediumFont = strdup( clopt_mediumFont );
-    if ( clopt_largeFont != NULL )
-        config.largeFont = strdup( clopt_largeFont );
-    if ( clopt_connFont != NULL )
-        config.connFont = strdup( clopt_connFont );
+        __config.serialLine = strdup( clopt_serialLine );
 
     if ( clopt_verbose != -1 )
-        config.verbose = clopt_verbose;
+        __config.verbose = clopt_verbose;
     if ( clopt_useTerminal != -1 )
-        config.useTerminal = clopt_useTerminal;
+        __config.useTerminal = clopt_useTerminal;
     if ( clopt_useSerial != -1 )
-        config.useSerial = clopt_useSerial;
+        __config.useSerial = clopt_useSerial;
     if ( clopt_throttle != -1 )
-        config.throttle = clopt_throttle;
+        __config.throttle = clopt_throttle;
     if ( clopt_useDebugger != -1 )
-        config.useDebugger = clopt_useDebugger;
-    if ( clopt_frontend_type != -1 )
-        config.frontend_type = clopt_frontend_type;
-    if ( clopt_hide_chrome != -1 )
-        config.hide_chrome = clopt_hide_chrome;
-    if ( clopt_show_ui_fullscreen != -1 )
-        config.show_ui_fullscreen = clopt_show_ui_fullscreen;
+        __config.useDebugger = clopt_useDebugger;
+    if ( clopt_frontend != -1 )
+        __config.frontend = clopt_frontend;
+    if ( clopt_chromeless != -1 )
+        __config.chromeless = clopt_chromeless;
+    if ( clopt_fullscreen != -1 )
+        __config.fullscreen = clopt_fullscreen;
     if ( clopt_scale > 0.0 )
-        config.scale = clopt_scale;
-    if ( clopt_netbook != -1 )
-        config.netbook = clopt_netbook;
+        __config.scale = clopt_scale;
     if ( clopt_mono != -1 )
-        config.mono = clopt_mono;
+        __config.mono = clopt_mono;
     if ( clopt_gray != -1 )
-        config.gray = clopt_gray;
+        __config.gray = clopt_gray;
     if ( clopt_small != -1 )
-        config.small = clopt_small;
+        __config.small = clopt_small;
     if ( clopt_tiny != -1 )
-        config.tiny = clopt_tiny;
-    if ( clopt_leave_shift_keys != -1 )
-        config.leave_shift_keys = clopt_leave_shift_keys;
+        __config.tiny = clopt_tiny;
+    if ( clopt_black_lcd != -1 )
+        __config.black_lcd = clopt_black_lcd == true;
+    if ( clopt_shiftless != -1 )
+        __config.shiftless = clopt_shiftless;
     if ( clopt_inhibit_shutdown != -1 )
-        config.inhibit_shutdown = clopt_inhibit_shutdown;
+        __config.inhibit_shutdown = clopt_inhibit_shutdown;
 
     /* After getting configs and params */
     /* normalize config_dir again in case it's been modified */
@@ -676,8 +593,8 @@ int config_init( int argc, char* argv[] )
 
     normalize_filenames();
 
-    config.print_config |= config.verbose;
-    if ( config.print_config ) {
+    __config.print_config |= __config.verbose;
+    if ( __config.print_config ) {
         fprintf( stdout, "--------------------------------------------------------------------------------\n" );
         fprintf( stdout, "-- Configuration file for x48ng\n" );
         fprintf( stdout, "-- This is a comment\n" );
@@ -691,55 +608,49 @@ int config_init( int argc, char* argv[] )
         fprintf( stdout, "port1 = \"%s\"\n", port1FileName );
         fprintf( stdout, "port2 = \"%s\"\n", port2FileName );
         fprintf( stdout, "\n" );
-        fprintf( stdout, "pseudo_terminal = %s\n", config.useTerminal ? "true" : "false" );
-        fprintf( stdout, "serial = %s\n", config.useSerial ? "true" : "false" );
-        fprintf( stdout, "serial_line = \"%s\"\n", config.serialLine );
+        fprintf( stdout, "pseudo_terminal = %s\n", __config.useTerminal ? "true" : "false" );
+        fprintf( stdout, "serial = %s\n", __config.useSerial ? "true" : "false" );
+        fprintf( stdout, "serial_line = \"%s\"\n", __config.serialLine );
         fprintf( stdout, "\n" );
-        fprintf( stdout, "verbose = %s\n", config.verbose ? "true" : "false" );
-        fprintf( stdout, "debugger = %s\n", config.useDebugger ? "true" : "false" );
-        fprintf( stdout, "throttle = %s\n", config.throttle ? "true" : "false" );
+        fprintf( stdout, "verbose = %s\n", __config.verbose ? "true" : "false" );
+        fprintf( stdout, "debugger = %s\n", __config.useDebugger ? "true" : "false" );
+        fprintf( stdout, "throttle = %s\n", __config.throttle ? "true" : "false" );
         fprintf( stdout, "\n" );
         fprintf( stdout, "--------------------\n" );
         fprintf( stdout, "-- User Interface --\n" );
         fprintf( stdout, "--------------------\n" );
         fprintf( stdout, "frontend = \"" );
-        switch ( config.frontend_type ) {
-            case FRONTEND_X11:
-                fprintf( stdout, "x11" );
+        switch ( __config.frontend ) {
+            case FRONTEND_SDL:
+                fprintf( stdout, "sdl" );
                 break;
-            case FRONTEND_SDL2:
-                fprintf( stdout, "sdl2" );
+            case FRONTEND_GTK:
+                fprintf( stdout, "gtk" );
                 break;
-            case FRONTEND_TEXT:
-                if ( config.small )
+            case FRONTEND_NCURSES:
+                if ( __config.small )
                     fprintf( stdout, "tui-small" );
-                else if ( config.tiny )
+                else if ( __config.tiny )
                     fprintf( stdout, "tui-tiny" );
                 else
                     fprintf( stdout, "tui" );
                 break;
         }
-        fprintf( stdout, "\" -- possible values: \"x11\", \"sdl2\" \"tui\", \"tui-small\", \"tui-tiny\"\n" );
-        fprintf( stdout, "hide_chrome = %s\n", config.hide_chrome ? "true" : "false" );
-        fprintf( stdout, "fullscreen = %s\n", config.show_ui_fullscreen ? "true" : "false" );
-        fprintf( stdout, "scale = %f -- applies only to sdl2\n", config.scale );
-        fprintf( stdout, "mono = %s\n", config.mono ? "true" : "false" );
-        fprintf( stdout, "gray = %s\n", config.gray ? "true" : "false" );
-        fprintf( stdout, "leave_shift_keys = %s\n", config.leave_shift_keys ? "true" : "false" );
-        fprintf( stdout, "inhibit_shutdown = %s\n", config.inhibit_shutdown ? "true" : "false" );
-        fprintf( stdout, "\n" );
-        fprintf( stdout, "x11_visual = \"%s\"\n", config.x11_visual );
-        fprintf( stdout, "netbook = %s\n", config.netbook ? "true" : "false" );
-        fprintf( stdout, "font_small = \"%s\"\n", config.smallFont );
-        fprintf( stdout, "font_medium = \"%s\"\n", config.mediumFont );
-        fprintf( stdout, "font_large = \"%s\"\n", config.largeFont );
-        fprintf( stdout, "font_devices = \"%s\"\n", config.connFont );
+        fprintf( stdout, "\" -- possible values: \"sdl\" \"tui\", \"tui-small\", \"tui-tiny\"\n" );
+        fprintf( stdout, "chromeless = %s\n", __config.chromeless ? "true" : "false" );
+        fprintf( stdout, "fullscreen = %s\n", __config.fullscreen ? "true" : "false" );
+        fprintf( stdout, "scale = %f -- applies only to sdl2\n", __config.scale );
+        fprintf( stdout, "mono = %s\n", __config.mono ? "true" : "false" );
+        fprintf( stdout, "gray = %s\n", __config.gray ? "true" : "false" );
+        fprintf( stdout, "black_lcd = %s\n", __config.black_lcd ? "true" : "false" );
+        fprintf( stdout, "shiftless = %s\n", __config.shiftless ? "true" : "false" );
+        fprintf( stdout, "inhibit_shutdown = %s\n", __config.inhibit_shutdown ? "true" : "false" );
         fprintf( stdout, "--------------------------------------------------------------------------------\n" );
 
-        if ( !config.verbose )
+        if ( !__config.verbose )
             exit( 0 );
     }
-    if ( config.verbose ) {
+    if ( __config.verbose ) {
         fprintf( stderr, "normalized_config_path = %s\n", normalized_config_path );
         fprintf( stderr, "normalized_rom_path = %s\n", normalized_rom_path );
         fprintf( stderr, "normalized_ram_path = %s\n", normalized_ram_path );
@@ -748,5 +659,7 @@ int config_init( int argc, char* argv[] )
         fprintf( stderr, "normalized_port2_path = %s\n", normalized_port2_path );
     }
 
-    return ( optind );
+    // return ( optind );
+
+    return &__config;
 }

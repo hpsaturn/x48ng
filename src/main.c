@@ -6,16 +6,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <unistd.h>
 
-#include "debugger.h"
-#include "emulator.h"
-#include "config.h"
-#include "ui.h" /* setup_frontend(); init_ui(); */
+#include <sys/time.h>
+
+#include "core/debugger.h"
+#include "core/emulate.h"
+#include "core/timers.h"
+
+#include "options.h"
+
+#include "ui4x/api.h"
+#include "ui4x/common.h"
+
+config_t config;
 
 void signal_handler( int sig )
 {
+    /* static int nb_refreshes_since_last_checking_events = 0; */
+
     switch ( sig ) {
         case SIGINT: /* Ctrl-C */
             enter_debugger |= USER_INTERRUPT;
@@ -26,7 +35,7 @@ void signal_handler( int sig )
         case SIGPIPE:
             ui_stop();
             exit_emulator();
-            exit( 0 );
+            exit( EXIT_SUCCESS );
         default:
             break;
     }
@@ -35,6 +44,19 @@ void signal_handler( int sig )
 int main( int argc, char** argv )
 {
     setlocale( LC_ALL, "C" );
+
+    config = *config_init( argc, argv );
+
+    /********************/
+    /* initialize stuff */
+    /********************/
+
+    /* Emulator */
+    init_emulator( &config );
+
+    /* (G)UI */
+    setup_ui( &config );
+    ui_start( &config );
 
     /*****************************************/
     /* handlers for SIGALRM, SIGPIPE */
@@ -79,8 +101,8 @@ int main( int argc, char** argv )
     struct itimerval it;
     it.it_interval.tv_sec = 0;
     it.it_interval.tv_usec = USEC_PER_FRAME;
-    it.it_value.tv_sec = 0;
-    it.it_value.tv_usec = USEC_PER_FRAME;
+    it.it_value.tv_sec = it.it_interval.tv_sec;
+    it.it_value.tv_usec = it.it_interval.tv_usec;
     setitimer( ITIMER_REAL, &it, ( struct itimerval* )0 );
 
     /**********************************************************/
@@ -94,17 +116,6 @@ int main( int argc, char** argv )
     flags &= ~O_NDELAY;
     flags &= ~O_NONBLOCK;
     fcntl( STDIN_FILENO, F_SETFL, flags );
-
-    /********************/
-    /* initialize stuff */
-    /********************/
-    config_init( argc, argv );
-
-    /* Emulator */
-    start_emulator();
-
-    /* (G)UI */
-    start_UI( argc, argv );
 
     /************************/
     /* Start emulation loop */
@@ -130,7 +141,7 @@ int main( int argc, char** argv )
         do {
             step_instruction();
 
-            if ( config.useDebugger && ( exec_flags & EXEC_BKPT ) && check_breakpoint( BP_EXEC, saturn.PC ) ) {
+            if ( config.useDebugger && ( exec_flags & EXEC_BKPT ) && check_breakpoint( BP_EXEC, saturn.pc ) ) {
                 enter_debugger |= BREAKPOINT_HIT;
                 break;
             }

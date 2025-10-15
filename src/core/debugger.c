@@ -1,18 +1,22 @@
-#include <stdio.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
 #include <readline/history.h>
 #include <readline/readline.h>
 
-#include "config.h"
-#include "emulator.h"
-#include "emulator_for_debugger.h"
-#include "romio.h"
-#include "ui.h" /* ui_update_LCD(); */
 #include "debugger.h"
+#include "emulate.h"
+#include "init.h"
+#include "options.h"
+#include "persistence.h"
+#include "romio.h"
+#include "timers.h"
+
+#include "ui4x/common.h"
 
 #define MAX_ARGS 16
 
@@ -92,8 +96,8 @@ static char instr[ 100 ];
 int num_bkpts;
 
 struct breakpoint {
-    word_20 addr;
-    word_20 end_addr;
+    Address addr;
+    Address end_addr;
     int flags;
 } bkpt_tbl[ MAX_BREAKPOINTS + 1 ];
 
@@ -325,18 +329,18 @@ static char* hst_bits[ 8 ] = {
 };
 
 typedef struct hp_real {
-    word_20 x;
+    Address x;
     word_32 ml;
     word_32 mh;
-    word_4 m;
-    word_1 s;
+    Nibble m;
+    Bit s;
 } hp_real;
 
 typedef struct objfunc {
     char* name;
     short length;
-    word_20 prolog;
-    char* ( *func )( word_20* addr, char* string );
+    Address prolog;
+    char* ( *func )( Address* addr, char* string );
 } objfunc_t;
 
 objfunc_t objects[];
@@ -625,12 +629,12 @@ static char* append_tab( char* buf )
     return p;
 }
 
-static int read_int( word_20* addr, int n )
+static int read_int( Address* addr, int n )
 {
     int i, t;
 
     for ( i = 0, t = 0; i < n; i++ )
-        t |= read_nibble( ( *addr )++ ) << ( i * 4 );
+        t |= bus_fetch_nibble( ( *addr )++ ) << ( i * 4 );
     return t;
 }
 
@@ -647,13 +651,13 @@ static char* append_tab_16( char* buf )
     return p;
 }
 
-static char* append_field( char* buf, word_4 fn )
+static char* append_field( char* buf, Nibble fn )
 {
     buf = append_str( buf, field_tbl[ fn + 16 * disassembler_mode ] );
     return buf;
 }
 
-static char* append_imm_nibble( char* buf, word_20* addr, int n )
+static char* append_imm_nibble( char* buf, Address* addr, int n )
 {
     int i;
     char t[ 16 ];
@@ -665,19 +669,19 @@ static char* append_imm_nibble( char* buf, word_20* addr, int n )
     }
     if ( n > 1 ) {
         for ( i = 0; i < n; i++ )
-            t[ i ] = hex[ disassembler_mode ][ read_nibble( ( *addr )++ ) ];
+            t[ i ] = hex[ disassembler_mode ][ bus_fetch_nibble( ( *addr )++ ) ];
         for ( i = n - 1; i >= 0; i-- ) {
             *buf++ = t[ i ];
         }
         *buf = '\0';
     } else {
-        sprintf( t, ( char* )"%d", read_nibble( ( *addr )++ ) );
+        sprintf( t, ( char* )"%d", bus_fetch_nibble( ( *addr )++ ) );
         buf = append_str( buf, t );
     }
     return buf;
 }
 
-static char* append_addr( char* buf, word_20 addr )
+static char* append_addr( char* buf, Address addr )
 {
     int shift;
     long mask;
@@ -691,7 +695,7 @@ static char* append_addr( char* buf, word_20 addr )
     return buf;
 }
 
-static char* append_r_addr( char* buf, word_20* pc, long disp, int n, int offset )
+static char* append_r_addr( char* buf, Address* pc, long disp, int n, int offset )
 {
     long sign;
 
@@ -728,7 +732,7 @@ static char* append_r_addr( char* buf, word_20* pc, long disp, int n, int offset
     return buf;
 }
 
-static char* append_pc_comment( char* buf, word_20 pc )
+static char* append_pc_comment( char* buf, Address pc )
 {
     char* p = buf;
 
@@ -788,19 +792,19 @@ static char* append_hst_bits( char* buf, int n )
     return p;
 }
 
-static char* disasm_1( word_20* addr, char* out )
+static char* disasm_1( Address* addr, char* out )
 {
-    word_4 n;
-    word_4 fn;
+    Nibble n;
+    Nibble fn;
     char* p;
     char buf[ 20 ];
     char c;
 
     p = out;
-    switch ( ( n = read_nibble( ( *addr )++ ) ) ) {
+    switch ( ( n = bus_fetch_nibble( ( *addr )++ ) ) ) {
         case 0:
         case 1:
-            fn = read_nibble( ( *addr )++ );
+            fn = bus_fetch_nibble( ( *addr )++ );
             fn = ( fn & 7 );
             if ( fn > 4 )
                 fn -= 4;
@@ -830,7 +834,7 @@ static char* disasm_1( word_20* addr, char* out )
             break;
 
         case 2:
-            fn = read_nibble( ( *addr )++ );
+            fn = bus_fetch_nibble( ( *addr )++ );
             fn = ( fn & 7 );
             if ( fn > 4 )
                 fn -= 4;
@@ -854,7 +858,7 @@ static char* disasm_1( word_20* addr, char* out )
             break;
 
         case 3:
-            n = read_nibble( ( *addr )++ );
+            n = bus_fetch_nibble( ( *addr )++ );
             switch ( disassembler_mode ) {
                 case HP_MNEMONICS:
                     c = ( n & 4 ) ? 'C' : 'A';
@@ -889,7 +893,7 @@ static char* disasm_1( word_20* addr, char* out )
 
         case 4:
         case 5:
-            fn = read_nibble( ( *addr )++ );
+            fn = bus_fetch_nibble( ( *addr )++ );
             switch ( disassembler_mode ) {
                 case HP_MNEMONICS:
                     p = append_str( out, op_str_1[ ( fn & 7 ) + 8 * disassembler_mode ] );
@@ -897,7 +901,7 @@ static char* disasm_1( word_20* addr, char* out )
                     if ( n == 4 ) {
                         p = append_str( p, ( fn < 8 ) ? ( char* )"A" : ( char* )"B" );
                     } else {
-                        n = read_nibble( ( *addr )++ );
+                        n = bus_fetch_nibble( ( *addr )++ );
                         if ( fn < 8 ) {
                             p = append_field( p, n );
                         } else {
@@ -912,7 +916,7 @@ static char* disasm_1( word_20* addr, char* out )
                         p = append_str( p, ( char* )"." );
                         p = append_str( p, ( fn < 8 ) ? ( char* )"a" : ( char* )"b" );
                     } else {
-                        n = read_nibble( ( *addr )++ );
+                        n = bus_fetch_nibble( ( *addr )++ );
                         if ( fn < 8 ) {
                             p = append_field( p, n );
                         } else {
@@ -933,7 +937,7 @@ static char* disasm_1( word_20* addr, char* out )
         case 7:
         case 8:
         case 0xc:
-            fn = read_nibble( *addr++ );
+            fn = bus_fetch_nibble( *addr++ );
             switch ( disassembler_mode ) {
                 case HP_MNEMONICS:
                     if ( n == 6 || n == 8 )
@@ -1018,33 +1022,33 @@ static char* disasm_1( word_20* addr, char* out )
     return p;
 }
 
-static char* disasm_8( word_20* addr, char* out )
+static char* disasm_8( Address* addr, char* out )
 {
-    word_4 n;
-    word_4 fn;
+    Nibble n;
+    Nibble fn;
     char* p = out;
     char c;
     char buf[ 20 ];
-    word_20 disp, pc;
+    Address disp, pc;
 
-    fn = read_nibble( ( *addr )++ );
+    fn = bus_fetch_nibble( ( *addr )++ );
     switch ( fn ) {
         case 0:
-            n = read_nibble( ( *addr )++ );
+            n = bus_fetch_nibble( ( *addr )++ );
             if ( NULL != ( p = ( char* )in_str_80[ n + 16 * disassembler_mode ] ) ) {
                 p = append_str( out, p );
                 return p;
             }
             switch ( n ) {
                 case 8:
-                    fn = read_nibble( ( *addr )++ );
+                    fn = bus_fetch_nibble( ( *addr )++ );
                     if ( NULL != ( p = ( char* )in_str_808[ fn + 16 * disassembler_mode ] ) ) {
                         p = append_str( out, p );
                         return p;
                     }
                     switch ( fn ) {
                         case 1:
-                            n = read_nibble( ( *addr )++ );
+                            n = bus_fetch_nibble( ( *addr )++ );
                             if ( n == 0 ) {
                                 switch ( disassembler_mode ) {
                                     case HP_MNEMONICS:
@@ -1061,7 +1065,7 @@ static char* disasm_8( word_20* addr, char* out )
                             }
                             break;
                         case 2:
-                            n = read_nibble( ( *addr )++ );
+                            n = bus_fetch_nibble( ( *addr )++ );
                             switch ( disassembler_mode ) {
                                 case HP_MNEMONICS:
                                     if ( n < 5 ) {
@@ -1116,7 +1120,7 @@ static char* disasm_8( word_20* addr, char* out )
                         case 0xa:
                         case 0xb:
 
-                            n = read_nibble( ( *addr )++ );
+                            n = bus_fetch_nibble( ( *addr )++ );
                             pc = *addr;
                             disp = read_int( addr, 2 );
 
@@ -1162,7 +1166,7 @@ static char* disasm_8( word_20* addr, char* out )
                 case 0xc:
                 case 0xd:
                 case 0xf:
-                    fn = read_nibble( ( *addr )++ );
+                    fn = bus_fetch_nibble( ( *addr )++ );
                     switch ( disassembler_mode ) {
                         case HP_MNEMONICS:
                             sprintf( buf, ( n == 0xf ) ? ( char* )"%c%cEX" : ( char* )"%c=%c", ( n == 0xd ) ? 'P' : 'C',
@@ -1190,7 +1194,7 @@ static char* disasm_8( word_20* addr, char* out )
             break;
 
         case 1:
-            switch ( n = read_nibble( ( *addr )++ ) ) {
+            switch ( n = bus_fetch_nibble( ( *addr )++ ) ) {
                 case 0:
                 case 1:
                 case 2:
@@ -1234,8 +1238,8 @@ static char* disasm_8( word_20* addr, char* out )
                     break;
 
                 case 8:
-                    fn = read_nibble( ( *addr )++ );
-                    n = read_nibble( ( *addr )++ );
+                    fn = bus_fetch_nibble( ( *addr )++ );
+                    n = bus_fetch_nibble( ( *addr )++ );
                     switch ( disassembler_mode ) {
                         case HP_MNEMONICS:
                             sprintf( buf, ( char* )"%s=%s%cCON", op_str_81[ ( n & 3 ) + 4 * disassembler_mode ],
@@ -1243,7 +1247,7 @@ static char* disasm_8( word_20* addr, char* out )
                             p = append_str( out, buf );
                             p = append_tab( out );
                             p = append_field( p, fn );
-                            fn = read_nibble( ( *addr )++ );
+                            fn = bus_fetch_nibble( ( *addr )++ );
                             sprintf( buf, ( char* )", %d", fn + 1 );
                             p = append_str( p, buf );
                             break;
@@ -1251,7 +1255,7 @@ static char* disasm_8( word_20* addr, char* out )
                             p = append_str( out, ( n < 8 ) ? ( char* )"add" : ( char* )"sub" );
                             p = append_field( p, fn );
                             p = append_tab( out );
-                            fn = read_nibble( ( *addr )++ );
+                            fn = bus_fetch_nibble( ( *addr )++ );
                             sprintf( buf, ( char* )"#%d, (char*)", fn + 1 );
                             p = append_str( p, buf );
                             p = append_str( p, op_str_81[ ( n & 3 ) + 4 * disassembler_mode ] );
@@ -1268,11 +1272,11 @@ static char* disasm_8( word_20* addr, char* out )
                             sprintf( buf, ( char* )"%sSRB.F", op_str_81[ ( n & 3 ) + 4 * disassembler_mode ] );
                             p = append_str( out, buf );
                             p = append_tab( out );
-                            p = append_field( p, read_nibble( ( *addr )++ ) );
+                            p = append_field( p, bus_fetch_nibble( ( *addr )++ ) );
                             break;
                         case CLASS_MNEMONICS:
                             p = append_str( out, ( char* )"lsr" );
-                            p = append_field( p, read_nibble( ( *addr )++ ) );
+                            p = append_field( p, bus_fetch_nibble( ( *addr )++ ) );
                             p = append_tab( out );
                             p = append_str( p, ( char* )"#1, (char*)" );
                             p = append_str( p, op_str_81[ ( n & 3 ) + 4 * disassembler_mode ] );
@@ -1284,11 +1288,11 @@ static char* disasm_8( word_20* addr, char* out )
                     break;
 
                 case 0xa:
-                    fn = read_nibble( ( *addr )++ );
-                    n = read_nibble( ( *addr )++ );
+                    fn = bus_fetch_nibble( ( *addr )++ );
+                    n = bus_fetch_nibble( ( *addr )++ );
                     if ( n > 2 )
                         break;
-                    c = ( char )read_nibble( ( *addr )++ );
+                    c = ( char )bus_fetch_nibble( ( *addr )++ );
                     if ( ( ( int )c & 7 ) > 4 )
                         break;
                     switch ( disassembler_mode ) {
@@ -1328,7 +1332,7 @@ static char* disasm_8( word_20* addr, char* out )
                     break;
 
                 case 0xb:
-                    n = read_nibble( ( *addr )++ );
+                    n = bus_fetch_nibble( ( *addr )++ );
                     if ( ( n < 2 ) || ( n > 7 ) )
                         break;
 
@@ -1362,7 +1366,7 @@ static char* disasm_8( word_20* addr, char* out )
             break;
 
         case 2:
-            n = read_nibble( ( *addr )++ );
+            n = bus_fetch_nibble( ( *addr )++ );
             switch ( disassembler_mode ) {
                 case HP_MNEMONICS:
                     if ( n == 0xf ) {
@@ -1386,7 +1390,7 @@ static char* disasm_8( word_20* addr, char* out )
             break;
 
         case 3:
-            n = read_nibble( ( *addr )++ );
+            n = bus_fetch_nibble( ( *addr )++ );
             pc = *addr;
             disp = read_int( addr, 2 );
             switch ( disassembler_mode ) {
@@ -1444,7 +1448,7 @@ static char* disasm_8( word_20* addr, char* out )
 
         case 6:
         case 7:
-            n = read_nibble( ( *addr )++ );
+            n = bus_fetch_nibble( ( *addr )++ );
             pc = *addr;
             disp = read_int( addr, 2 );
             switch ( disassembler_mode ) {
@@ -1481,7 +1485,7 @@ static char* disasm_8( word_20* addr, char* out )
 
         case 8:
         case 9:
-            n = read_nibble( ( *addr )++ );
+            n = bus_fetch_nibble( ( *addr )++ );
             pc = *addr;
             disp = read_int( addr, 2 );
             switch ( disassembler_mode ) {
@@ -1567,23 +1571,23 @@ static char* disasm_8( word_20* addr, char* out )
     return p;
 }
 
-static word_20 disassemble( word_20 addr, char* out )
+static Address disassemble( Address addr, char* out )
 {
-    word_4 n;
-    word_4 fn;
+    Nibble n;
+    Nibble fn;
     char* p = out;
     char c;
     char buf[ 20 ];
-    word_20 disp, pc;
+    Address disp, pc;
 
-    switch ( n = read_nibble( addr++ ) ) {
+    switch ( n = bus_fetch_nibble( addr++ ) ) {
         case 0:
-            if ( ( n = read_nibble( addr++ ) ) != 0xe ) {
+            if ( ( n = bus_fetch_nibble( addr++ ) ) != 0xe ) {
                 p = append_str( out, opcode_0_tbl[ n + 16 * disassembler_mode ] );
                 break;
             }
-            fn = read_nibble( addr++ );
-            n = read_nibble( addr++ );
+            fn = bus_fetch_nibble( addr++ );
+            n = bus_fetch_nibble( addr++ );
             switch ( disassembler_mode ) {
                 case HP_MNEMONICS:
                     sprintf( buf, op_str_0[ ( n & 7 ) + 8 * HP_MNEMONICS ], ( n < 8 ) ? '&' : '!' );
@@ -1608,7 +1612,7 @@ static word_20 disassemble( word_20 addr, char* out )
             break;
 
         case 2:
-            n = read_nibble( addr++ );
+            n = bus_fetch_nibble( addr++ );
             switch ( disassembler_mode ) {
                 case HP_MNEMONICS:
                     sprintf( buf, ( char* )"P=%d", n );
@@ -1625,7 +1629,7 @@ static word_20 disassemble( word_20 addr, char* out )
             break;
 
         case 3:
-            fn = read_nibble( addr++ );
+            fn = bus_fetch_nibble( addr++ );
             switch ( disassembler_mode ) {
                 case HP_MNEMONICS:
                     if ( fn < 5 ) {
@@ -1755,7 +1759,7 @@ static word_20 disassemble( word_20 addr, char* out )
             break;
 
         case 8:
-            fn = read_nibble( addr ); /* PEEK */
+            fn = bus_fetch_nibble( addr ); /* PEEK */
             if ( fn != 0xa && fn != 0xb ) {
                 p = disasm_8( &addr, out );
                 break;
@@ -1763,7 +1767,7 @@ static word_20 disassemble( word_20 addr, char* out )
             /* Fall through */
 
         case 9:
-            fn = read_nibble( addr++ );
+            fn = bus_fetch_nibble( addr++ );
             if ( n == 8 ) {
                 c = ( char )( ( fn == 0xa ) ? 0 : 1 );
                 fn = 0xf;
@@ -1772,7 +1776,7 @@ static word_20 disassemble( word_20 addr, char* out )
                 fn &= 7;
             }
 
-            n = read_nibble( addr++ );
+            n = bus_fetch_nibble( addr++ );
             pc = addr;
             disp = read_int( &addr, 2 );
 
@@ -1819,13 +1823,13 @@ static word_20 disassemble( word_20 addr, char* out )
         default:
             switch ( n ) {
                 case 0xa:
-                    fn = read_nibble( addr++ );
+                    fn = bus_fetch_nibble( addr++ );
                     c = ( char )( ( fn < 8 ) ? 0 : 1 );
                     fn &= 7;
                     disp = 0xa;
                     break;
                 case 0xb:
-                    fn = read_nibble( addr++ );
+                    fn = bus_fetch_nibble( addr++ );
                     c = ( char )( ( fn < 8 ) ? 0 : 1 );
                     fn &= 7;
                     disp = 0xb;
@@ -1849,7 +1853,7 @@ static word_20 disassemble( word_20 addr, char* out )
                     break;
             }
 
-            n = read_nibble( addr++ );
+            n = bus_fetch_nibble( addr++ );
             pc = 0;
 
             switch ( disp ) {
@@ -2008,9 +2012,9 @@ static word_20 disassemble( word_20 addr, char* out )
     return addr;
 }
 
-static char* skip_ob( word_20* addr, char* string )
+static char* skip_ob( Address* addr, char* string )
 {
-    word_20 size, type;
+    Address size, type;
     char* p = string;
     struct objfunc* op;
 
@@ -2044,10 +2048,10 @@ static long hxs2real( long hxs )
     return n;
 }
 
-static char* dec_bin_int( word_20* addr, char* string )
+static char* dec_bin_int( Address* addr, char* string )
 {
     char* p = string;
-    word_20 n = 0;
+    Address n = 0;
 
     n = read_nibbles( *addr, 5 );
     *addr += 5;
@@ -2056,7 +2060,7 @@ static char* dec_bin_int( word_20* addr, char* string )
     return p;
 }
 
-static char* real_number( word_20* addr, char* string, int ml, int xl )
+static char* real_number( Address* addr, char* string, int ml, int xl )
 {
     hp_real r;
     long re, xs;
@@ -2156,11 +2160,11 @@ static char* real_number( word_20* addr, char* string, int ml, int xl )
     return p;
 }
 
-static char* dec_real( word_20* addr, char* string ) { return real_number( addr, string, 11, 3 ); }
+static char* dec_real( Address* addr, char* string ) { return real_number( addr, string, 11, 3 ); }
 
-static char* dec_long_real( word_20* addr, char* string ) { return real_number( addr, string, 14, 5 ); }
+static char* dec_long_real( Address* addr, char* string ) { return real_number( addr, string, 14, 5 ); }
 
-static char* dec_complex( word_20* addr, char* string )
+static char* dec_complex( Address* addr, char* string )
 {
     char* p = string;
 
@@ -2173,7 +2177,7 @@ static char* dec_complex( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_long_complex( word_20* addr, char* string )
+static char* dec_long_complex( Address* addr, char* string )
 {
     char* p = string;
 
@@ -2186,9 +2190,9 @@ static char* dec_long_complex( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_string( word_20* addr, char* string )
+static char* dec_string( Address* addr, char* string )
 {
-    word_20 len;
+    Address len;
     unsigned char c;
     char* p = string;
     int i, n;
@@ -2224,7 +2228,7 @@ static char* dec_string( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_hex_string( word_20* addr, char* string )
+static char* dec_hex_string( Address* addr, char* string )
 {
     int len, lead, i, n;
     char* p = string;
@@ -2238,7 +2242,7 @@ static char* dec_hex_string( word_20* addr, char* string )
         *p++ = ' ';
         lead = 1;
         for ( i = len - 1; i >= 0; i-- ) {
-            *p = hex[ disassembler_mode ][ read_nibble( *addr + i ) ];
+            *p = hex[ disassembler_mode ][ bus_fetch_nibble( *addr + i ) ];
             if ( lead ) {
                 if ( ( i != 0 ) && ( *p == '0' ) )
                     p--;
@@ -2264,7 +2268,7 @@ static char* dec_hex_string( word_20* addr, char* string )
             n = 1000;
 
         for ( i = 0; i < n; i++ )
-            *p++ = hex[ disassembler_mode ][ read_nibble( *addr + i ) ];
+            *p++ = hex[ disassembler_mode ][ bus_fetch_nibble( *addr + i ) ];
 
         if ( n != len ) {
             *p++ = '.';
@@ -2284,10 +2288,10 @@ static char* xlib_name( int lib, int command, char* string )
     int n, len;
     int i, lib_n = 0;
     unsigned char c;
-    word_20 romptab, acptr;
-    word_20 offset, hash_end;
-    word_20 lib_addr, name_addr;
-    word_20 type, ram_base, ram_mask;
+    Address romptab, acptr;
+    Address offset, hash_end;
+    Address lib_addr, name_addr;
+    Address type, ram_base, ram_mask;
     short present = 0;
     char* p = string;
 
@@ -2438,14 +2442,14 @@ static char* xlib_name( int lib, int command, char* string )
     return p;
 }
 
-static short check_xlib( word_20 addr, char* string )
+static short check_xlib( Address addr, char* string )
 {
     int n, lib, command;
-    word_20 romptab;
-    word_20 offset, link_end;
-    word_20 acptr;
-    word_20 lib_addr;
-    word_20 type, ram_base, ram_mask;
+    Address romptab;
+    Address offset, link_end;
+    Address acptr;
+    Address lib_addr;
+    Address type, ram_base, ram_mask;
     char* p = string;
 
     /*
@@ -2580,10 +2584,10 @@ static short check_xlib( word_20 addr, char* string )
     return 0;
 }
 
-static char* dec_rpl_obj( word_20* addr, char* string )
+static char* dec_rpl_obj( Address* addr, char* string )
 {
-    word_20 prolog = 0;
-    word_20 prolog_2;
+    Address prolog = 0;
+    Address prolog_2;
     char* p = string;
     char tmp_str[ 80 ];
     struct objfunc* op;
@@ -2619,9 +2623,9 @@ static char* dec_rpl_obj( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_list( word_20* addr, char* string )
+static char* dec_list( Address* addr, char* string )
 {
-    word_20 semi;
+    Address semi;
     char* p = string;
 
     *p++ = '{';
@@ -2643,9 +2647,9 @@ static char* dec_list( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_symb( word_20* addr, char* string )
+static char* dec_symb( Address* addr, char* string )
 {
-    word_20 semi;
+    Address semi;
     char* p = string;
 
     semi = read_nibbles( *addr, 5 );
@@ -2665,9 +2669,9 @@ static char* dec_symb( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_unit( word_20* addr, char* string )
+static char* dec_unit( Address* addr, char* string )
 {
-    word_20 semi;
+    Address semi;
     char* p = string;
 
     semi = read_nibbles( *addr, 5 );
@@ -2683,9 +2687,9 @@ static char* dec_unit( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_unit_op( word_20* addr, char* string )
+static char* dec_unit_op( Address* addr, char* string )
 {
-    word_20 op;
+    Address op;
     char* p = string;
 
     op = read_nibbles( *addr - 5, 5 );
@@ -2712,12 +2716,12 @@ static char* dec_unit_op( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_library( word_20* addr, char* string )
+static char* dec_library( Address* addr, char* string )
 {
-    word_20 libsize, libidsize;
+    Address libsize, libidsize;
     /*
-      word_20        hashoff, mesgoff, linkoff, cfgoff;
-      word_20        mesgloc, cfgloc;
+      Address        hashoff, mesgoff, linkoff, cfgoff;
+      Address        mesgloc, cfgloc;
     */
     int i, libnum;
     unsigned char c;
@@ -2745,9 +2749,9 @@ static char* dec_library( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_library_data( word_20* addr, char* string )
+static char* dec_library_data( Address* addr, char* string )
 {
-    word_20 size;
+    Address size;
     char* p = string;
 
     size = read_nibbles( *addr, 5 );
@@ -2761,9 +2765,9 @@ static char* dec_library_data( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_acptr( word_20* addr, char* string )
+static char* dec_acptr( Address* addr, char* string )
 {
-    word_20 size;
+    Address size;
     char* p = string;
     int i;
 
@@ -2772,10 +2776,10 @@ static char* dec_acptr( word_20* addr, char* string )
         sprintf( p, "ACPTR " );
         p += strlen( p );
         for ( i = 0; i < 5; i++ )
-            *p++ = hex[ disassembler_mode ][ read_nibble( *addr + i ) ];
+            *p++ = hex[ disassembler_mode ][ bus_fetch_nibble( *addr + i ) ];
         *p++ = ' ';
         for ( i = 5; i < 10; i++ )
-            *p++ = hex[ disassembler_mode ][ read_nibble( *addr + i ) ];
+            *p++ = hex[ disassembler_mode ][ bus_fetch_nibble( *addr + i ) ];
     } else {
         size = read_nibbles( *addr, 5 );
         sprintf( p, "Ext 1" );
@@ -2788,9 +2792,9 @@ static char* dec_acptr( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_prog( word_20* addr, char* string )
+static char* dec_prog( Address* addr, char* string )
 {
-    word_20 semi;
+    Address semi;
     char* p = string;
 
     semi = read_nibbles( *addr, 5 );
@@ -2806,10 +2810,10 @@ static char* dec_prog( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_code( word_20* addr, char* string )
+static char* dec_code( Address* addr, char* string )
 {
     char* p = string;
-    word_20 n, len;
+    Address n, len;
 
     len = read_nibbles( *addr, 5 );
     sprintf( p, "Code" );
@@ -2827,7 +2831,7 @@ static char* dec_code( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_local_ident( word_20* addr, char* string )
+static char* dec_local_ident( Address* addr, char* string )
 {
     int len, i, n;
     char* p = string;
@@ -2860,7 +2864,7 @@ static char* dec_local_ident( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_global_ident( word_20* addr, char* string )
+static char* dec_global_ident( Address* addr, char* string )
 {
     int len, i, n;
     char* p = string;
@@ -2893,7 +2897,7 @@ static char* dec_global_ident( word_20* addr, char* string )
     return p;
 }
 
-static char* dec_xlib_name( word_20* addr, char* string )
+static char* dec_xlib_name( Address* addr, char* string )
 {
     int lib, command;
 
@@ -2905,11 +2909,11 @@ static char* dec_xlib_name( word_20* addr, char* string )
     return xlib_name( lib, command, string );
 }
 
-static char* any_array( word_20* addr, char* string, short lnk_flag )
+static char* any_array( Address* addr, char* string, short lnk_flag )
 {
-    word_20 len, type, dim;
-    word_20 *dim_lens, *dims;
-    word_20 array_addr, elem_addr;
+    Address len, type, dim;
+    Address *dim_lens, *dims;
+    Address array_addr, elem_addr;
     long elems;
     int d, i;
     char* p = string;
@@ -2928,8 +2932,8 @@ static char* any_array( word_20* addr, char* string, short lnk_flag )
             break;
     }
 
-    dim_lens = ( word_20* )malloc( dim * sizeof( word_20 ) );
-    dims = ( word_20* )malloc( dim * sizeof( word_20 ) );
+    dim_lens = ( Address* )malloc( dim * sizeof( Address ) );
+    dims = ( Address* )malloc( dim * sizeof( Address ) );
     elems = 1;
     for ( i = 0; i < dim; i++ ) {
         dim_lens[ i ] = read_nibbles( *addr, 5 );
@@ -2991,11 +2995,11 @@ static char* any_array( word_20* addr, char* string, short lnk_flag )
     return p;
 }
 
-static char* dec_array( word_20* addr, char* string ) { return any_array( addr, string, 0 ); }
+static char* dec_array( Address* addr, char* string ) { return any_array( addr, string, 0 ); }
 
-static char* dec_lnk_array( word_20* addr, char* string ) { return any_array( addr, string, 1 ); }
+static char* dec_lnk_array( Address* addr, char* string ) { return any_array( addr, string, 1 ); }
 
-static char* dec_char( word_20* addr, char* string )
+static char* dec_char( Address* addr, char* string )
 {
     char* p = string;
     unsigned char c;
@@ -3052,9 +3056,9 @@ objfunc_t objects[] = {
     {0,                        0, 0,         0               }
 };
 
-static char* decode_rpl_obj( word_20 addr, char* buf )
+static char* decode_rpl_obj( Address addr, char* buf )
 {
-    word_20 prolog = 0;
+    Address prolog = 0;
     int len;
     char* p = buf;
     char tmp_str[ 80 ];
@@ -3190,7 +3194,7 @@ cmd_tbl[] = {
     {0,        0,            0                                                                    }
 };
 
-int check_breakpoint( int type, word_20 addr )
+int check_breakpoint( int type, Address addr )
 {
     struct breakpoint* bp;
     int i, n;
@@ -3209,9 +3213,9 @@ int check_breakpoint( int type, word_20 addr )
         if ( bp->flags & type && addr == bp->addr ) {
 hit_it:
             if ( type == BP_READ ) {
-                printf( "%.5lX: Read watchpoint %d hit at %.5lX\n", saturn.PC, i, addr );
+                printf( "%.5lX: Read watchpoint %d hit at %.5lX\n", saturn.pc, i, addr );
             } else if ( type == BP_WRITE ) {
-                printf( "%.5lX: Write watchpoint %d hit at %.5lX\n", saturn.PC, i, addr );
+                printf( "%.5lX: Write watchpoint %d hit at %.5lX\n", saturn.pc, i, addr );
             } else
                 printf( "Breakpoint %d hit at %.5lX\n", i, addr );
 
@@ -3278,7 +3282,7 @@ static int decode_dec( int* num, char* arg )
     return 1;
 }
 
-static int decode_20( word_20* addr, char* arg )
+static int decode_20( Address* addr, char* arg )
 {
     if ( arg == ( char* )0 ) {
         printf( "Command requires an argument.\n" );
@@ -3348,7 +3352,7 @@ static int decode_64( word_64* addr, char* arg )
     return 1;
 }
 
-static char* str_nibbles( word_20 addr, int n )
+static char* str_nibbles( Address addr, int n )
 {
     static char str[ 1025 ];
     char* cp;
@@ -3360,7 +3364,7 @@ static char* str_nibbles( word_20 addr, int n )
     }
 
     for ( cp = str, i = 0; i < n; i++ ) {
-        sprintf( cp, "%.1X", read_nibble( addr + i ) );
+        sprintf( cp, "%.1X", bus_fetch_nibble( addr + i ) );
         cp++;
     }
     *cp = '\0';
@@ -3392,7 +3396,7 @@ static int confirm( const char* prompt )
 static void cmd_break( int argc, char** argv )
 {
     int i;
-    word_20 addr;
+    Address addr;
 
     if ( argc == 1 ) {
         for ( i = 0; i < MAX_BREAKPOINTS; i++ ) {
@@ -3432,7 +3436,7 @@ static void cmd_delete( int argc, char** argv )
 
     if ( argc == 1 ) {
         for ( num = 0; num < MAX_BREAKPOINTS; num++ ) {
-            if ( bkpt_tbl[ num ].addr == saturn.PC ) {
+            if ( bkpt_tbl[ num ].addr == saturn.pc ) {
                 if ( bkpt_tbl[ num ].flags == BP_EXEC ) {
                     printf( "Breakpoint %d at 0x%.5lX deleted.\n", num + 1, bkpt_tbl[ num ].addr );
                 } else if ( bkpt_tbl[ num ].flags == BP_RANGE ) {
@@ -3480,11 +3484,11 @@ static void cmd_delete( int argc, char** argv )
 
 static void cmd_go( int argc, char** argv )
 {
-    word_20 addr;
+    Address addr;
 
     str_to_upper( argv[ 1 ] );
     if ( decode_20( &addr, argv[ 1 ] ) ) {
-        saturn.PC = addr;
+        saturn.pc = addr;
         enter_debugger &= ~ILLEGAL_INSTRUCTION;
     }
 }
@@ -3529,7 +3533,7 @@ static void cmd_load( int argc, char** argv )
             free( tmp_saturn.port2 );
 
         /* After reloading state we need to refresh the UI's LCD */
-        ui_update_LCD();
+        ui_update_display();
     } else {
         printf( "Loading emulator-state from files failed.\n" );
         if ( saturn.rom )
@@ -3612,7 +3616,7 @@ static void set_st( word_64 val )
     int i;
 
     for ( i = 0; i < 16; i++ )
-        saturn.PSTAT[ i ] = ( val & ( 1 << i ) ) ? 1 : 0;
+        saturn.pstat[ i ] = ( val & ( 1 << i ) ) ? 1 : 0;
 }
 
 static void dump_st( void )
@@ -3623,17 +3627,17 @@ static void dump_st( void )
     val = 0;
     for ( i = NB_PSTAT - 1; i >= 0; i-- ) {
         val <<= 1;
-        val |= saturn.PSTAT[ i ] ? 1 : 0;
+        val |= saturn.pstat[ i ] ? 1 : 0;
     }
     printf( "    ST:\t%.4X (", val );
     for ( i = NB_PSTAT - 1; i > 0; i-- ) {
-        if ( saturn.PSTAT[ i ] ) {
+        if ( saturn.pstat[ i ] ) {
             printf( "%.1X ", i );
         } else {
             printf( "- " );
         }
     }
-    if ( saturn.PSTAT[ 0 ] ) {
+    if ( saturn.pstat[ 0 ] ) {
         printf( "%.1X)\n", 0 );
     } else {
         printf( "-)\n" );
@@ -3642,34 +3646,34 @@ static void dump_st( void )
 
 static void set_hst( word_64 val )
 {
-    saturn.XM = 0;
-    saturn.SB = 0;
-    saturn.SR = 0;
-    saturn.MP = 0;
+    saturn.st[ XM ] = 0;
+    saturn.st[ SB ] = 0;
+    saturn.st[ SR ] = 0;
+    saturn.st[ MP ] = 0;
 
     if ( val & 1 )
-        saturn.XM = 1;
+        saturn.st[ XM ] = 1;
     if ( val & 2 )
-        saturn.SB = 1;
+        saturn.st[ SB ] = 1;
     if ( val & 4 )
-        saturn.SR = 1;
+        saturn.st[ SR ] = 1;
     if ( val & 8 )
-        saturn.MP = 1;
+        saturn.st[ MP ] = 1;
 }
 
 static void dump_hst( void )
 {
     short hst = 0;
-    if ( saturn.XM != 0 )
+    if ( saturn.st[ XM ] != 0 )
         hst |= 1;
-    if ( saturn.SB != 0 )
+    if ( saturn.st[ SB ] != 0 )
         hst |= 2;
-    if ( saturn.SR != 0 )
+    if ( saturn.st[ SR ] != 0 )
         hst |= 3;
-    if ( saturn.MP != 0 )
+    if ( saturn.st[ MP ] != 0 )
         hst |= 4;
-    printf( "   HST:\t%.1X    (%s%s%s%s)\n", hst, saturn.MP ? "MP " : "-- ", saturn.SR ? "SR " : "-- ", saturn.SB ? "SB " : "-- ",
-            saturn.XM ? "XM" : "--" );
+    printf( "   HST:\t%.1X    (%s%s%s%s)\n", hst, saturn.st[ MP ] ? "MP " : "-- ", saturn.st[ SR ] ? "SR " : "-- ", saturn.st[ SB ] ? "SB " : "-- ",
+            saturn.st[ XM ] ? "XM" : "--" );
 }
 
 static const char* mctl_str_gx[] = { "MMIO       ", "SysRAM     ", "Bank Switch", "Port 1     ", "Port 2     ", "SysROM     " };
@@ -3704,31 +3708,31 @@ static void cmd_regs( int argc, char** argv )
          * dump all registers
          */
         printf( "CPU is in %s mode. Registers:\n", saturn.hexmode == HEX ? "HEX" : "DEC" );
-        dump_reg( "     A", 16, saturn.A );
-        dump_reg( "     B", 16, saturn.B );
-        dump_reg( "     C", 16, saturn.C );
-        dump_reg( "     D", 16, saturn.D );
-        printf( "    D0:\t%.5lX ->", saturn.D0 );
+        dump_reg( "     A", 16, saturn.reg[ A ] );
+        dump_reg( "     B", 16, saturn.reg[ B ] );
+        dump_reg( "     C", 16, saturn.reg[ C ] );
+        dump_reg( "     D", 16, saturn.reg[ D ] );
+        printf( "    D0:\t%.5lX ->", saturn.d[0] );
         for ( i = 0; i < 20; i += 5 ) {
-            printf( " %s", str_nibbles( saturn.D0 + i, 5 ) );
+            printf( " %s", str_nibbles( saturn.d[0] + i, 5 ) );
         }
         printf( "\n" );
-        printf( "    D1:\t%.5lX ->", saturn.D1 );
+        printf( "    D1:\t%.5lX ->", saturn.d[1] );
         for ( i = 0; i < 20; i += 5 ) {
-            printf( " %s", str_nibbles( saturn.D1 + i, 5 ) );
+            printf( " %s", str_nibbles( saturn.d[1] + i, 5 ) );
         }
         printf( "\n" );
-        printf( "     P:\t%.1X\n", saturn.P );
-        disassemble( saturn.PC, instr );
-        printf( "    PC:\t%.5lX -> %s\n", saturn.PC, instr );
-        dump_reg( "    R0", 16, saturn.R0 );
-        dump_reg( "    R1", 16, saturn.R1 );
-        dump_reg( "    R2", 16, saturn.R2 );
-        dump_reg( "    R3", 16, saturn.R3 );
-        dump_reg( "    R4", 16, saturn.R4 );
-        dump_reg( "    IN", 4, saturn.IN );
-        dump_reg( "   OUT", 3, saturn.OUT );
-        printf( " CARRY:\t%.1d\n", saturn.CARRY );
+        printf( "     P:\t%.1X\n", saturn.p );
+        disassemble( saturn.pc, instr );
+        printf( "    PC:\t%.5lX -> %s\n", saturn.pc, instr );
+        dump_reg( "    R0", 16, saturn.reg_r[ 0 ] );
+        dump_reg( "    R1", 16, saturn.reg_r[ 1 ] );
+        dump_reg( "    R2", 16, saturn.reg_r[ 2 ] );
+        dump_reg( "    R3", 16, saturn.reg_r[ 3 ] );
+        dump_reg( "    R4", 16, saturn.reg_r[ 4 ] );
+        dump_reg( "    IN", 4, saturn.in );
+        dump_reg( "   OUT", 3, saturn.out );
+        printf( " CARRY:\t%.1d\n", saturn.carry );
         dump_st();
         dump_hst();
     } else if ( argc == 2 ) {
@@ -3737,48 +3741,48 @@ static void cmd_regs( int argc, char** argv )
          */
         str_to_upper( argv[ 1 ] );
         if ( !strcmp( "A", argv[ 1 ] ) ) {
-            dump_reg( "     A", 16, saturn.A );
+            dump_reg( "     A", 16, saturn.reg[ A ] );
         } else if ( !strcmp( "B", argv[ 1 ] ) ) {
-            dump_reg( "     B", 16, saturn.B );
+            dump_reg( "     B", 16, saturn.reg[ B ] );
         } else if ( !strcmp( "C", argv[ 1 ] ) ) {
-            dump_reg( "     C", 16, saturn.C );
+            dump_reg( "     C", 16, saturn.reg[ C ] );
         } else if ( !strcmp( "D", argv[ 1 ] ) ) {
-            dump_reg( "     D", 16, saturn.D );
+            dump_reg( "     D", 16, saturn.reg[ D ] );
         } else if ( !strcmp( "D0", argv[ 1 ] ) ) {
-            printf( "    D0:\t%.5lX ->", saturn.D0 );
+            printf( "    D0:\t%.5lX ->", saturn.d[0] );
             for ( i = 0; i < 20; i += 5 ) {
-                printf( " %s", str_nibbles( saturn.D0 + i, 5 ) );
+                printf( " %s", str_nibbles( saturn.d[0] + i, 5 ) );
             }
             printf( "\n" );
         } else if ( !strcmp( "D1", argv[ 1 ] ) ) {
-            printf( "    D1:\t%.5lX ->", saturn.D1 );
+            printf( "    D1:\t%.5lX ->", saturn.d[1] );
             for ( i = 0; i < 20; i += 5 ) {
-                printf( " %s", str_nibbles( saturn.D1 + i, 5 ) );
+                printf( " %s", str_nibbles( saturn.d[1] + i, 5 ) );
             }
             printf( "\n" );
         } else if ( !strcmp( "P", argv[ 1 ] ) ) {
-            printf( "     P:\t%.1X\n", saturn.P );
+            printf( "     P:\t%.1X\n", saturn.p );
         } else if ( !strcmp( "PC", argv[ 1 ] ) ) {
-            disassemble( saturn.PC, instr );
-            printf( "    PC:\t%.5lX -> %s\n", saturn.PC, instr );
+            disassemble( saturn.pc, instr );
+            printf( "    PC:\t%.5lX -> %s\n", saturn.pc, instr );
         } else if ( !strcmp( "R0", argv[ 1 ] ) ) {
-            dump_reg( "    R0", 16, saturn.R0 );
+            dump_reg( "    R0", 16, saturn.reg_r[ 0 ] );
         } else if ( !strcmp( "R1", argv[ 1 ] ) ) {
-            dump_reg( "    R1", 16, saturn.R1 );
+            dump_reg( "    R1", 16, saturn.reg_r[ 1 ] );
         } else if ( !strcmp( "R2", argv[ 1 ] ) ) {
-            dump_reg( "    R2", 16, saturn.R2 );
+            dump_reg( "    R2", 16, saturn.reg_r[ 2 ] );
         } else if ( !strcmp( "R3", argv[ 1 ] ) ) {
-            dump_reg( "    R3", 16, saturn.R3 );
+            dump_reg( "    R3", 16, saturn.reg_r[ 3 ] );
         } else if ( !strcmp( "R4", argv[ 1 ] ) ) {
-            dump_reg( "    R4", 16, saturn.R4 );
+            dump_reg( "    R4", 16, saturn.reg_r[ 4 ] );
         } else if ( !strcmp( "IN", argv[ 1 ] ) ) {
-            dump_reg( "    IN", 4, saturn.IN );
+            dump_reg( "    IN", 4, saturn.in );
         } else if ( !strcmp( "OUT", argv[ 1 ] ) ) {
-            dump_reg( "   OUT", 3, saturn.OUT );
+            dump_reg( "   OUT", 3, saturn.out );
         } else if ( !strcmp( "CARRY", argv[ 1 ] ) ) {
-            printf( " CARRY:\t%.1d\n", saturn.CARRY );
+            printf( " CARRY:\t%.1d\n", saturn.carry );
         } else if ( !strcmp( "CY", argv[ 1 ] ) ) {
-            printf( " CARRY:\t%.1d\n", saturn.CARRY );
+            printf( " CARRY:\t%.1d\n", saturn.carry );
         } else if ( !strcmp( "ST", argv[ 1 ] ) ) {
             dump_st();
         } else if ( !strcmp( "HST", argv[ 1 ] ) ) {
@@ -3794,65 +3798,65 @@ static void cmd_regs( int argc, char** argv )
         str_to_upper( argv[ 2 ] );
         if ( decode_64( &val, argv[ 2 ] ) ) {
             if ( !strcmp( "A", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.A );
-                dump_reg( "     A", 16, saturn.A );
+                set_reg( val, 16, saturn.reg[ A ] );
+                dump_reg( "     A", 16, saturn.reg[ A ] );
             } else if ( !strcmp( "B", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.B );
-                dump_reg( "     B", 16, saturn.B );
+                set_reg( val, 16, saturn.reg[ B ] );
+                dump_reg( "     B", 16, saturn.reg[ B ] );
             } else if ( !strcmp( "C", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.C );
-                dump_reg( "     C", 16, saturn.C );
+                set_reg( val, 16, saturn.reg[ C ] );
+                dump_reg( "     C", 16, saturn.reg[ C ] );
             } else if ( !strcmp( "D", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.D );
-                dump_reg( "     D", 16, saturn.D );
+                set_reg( val, 16, saturn.reg[ D ] );
+                dump_reg( "     D", 16, saturn.reg[ D ] );
             } else if ( !strcmp( "D0", argv[ 1 ] ) ) {
-                saturn.D0 = ( word_20 )( val & 0xfffff );
-                printf( "    D0:\t%.5lX ->", saturn.D0 );
+                saturn.d[0] = ( Address )( val & 0xfffff );
+                printf( "    D0:\t%.5lX ->", saturn.d[0] );
                 for ( i = 0; i < 20; i += 5 ) {
-                    printf( " %s", str_nibbles( saturn.D0 + i, 5 ) );
+                    printf( " %s", str_nibbles( saturn.d[0] + i, 5 ) );
                 }
                 printf( "\n" );
             } else if ( !strcmp( "D1", argv[ 1 ] ) ) {
-                saturn.D1 = ( word_20 )( val & 0xfffff );
-                printf( "    D1:\t%.5lX ->", saturn.D1 );
+                saturn.d[1] = ( Address )( val & 0xfffff );
+                printf( "    D1:\t%.5lX ->", saturn.d[1] );
                 for ( i = 0; i < 20; i += 5 ) {
-                    printf( " %s", str_nibbles( saturn.D1 + i, 5 ) );
+                    printf( " %s", str_nibbles( saturn.d[1] + i, 5 ) );
                 }
                 printf( "\n" );
             } else if ( !strcmp( "P", argv[ 1 ] ) ) {
-                saturn.P = ( word_4 )( val & 0xf );
-                printf( "     P:\t%.1X\n", saturn.P );
+                saturn.p = ( Nibble )( val & 0xf );
+                printf( "     P:\t%.1X\n", saturn.p );
             } else if ( !strcmp( "PC", argv[ 1 ] ) ) {
-                saturn.PC = ( word_20 )( val & 0xfffff );
-                disassemble( saturn.PC, instr );
-                printf( "    PC:\t%.5lX -> %s\n", saturn.PC, instr );
+                saturn.pc = ( Address )( val & 0xfffff );
+                disassemble( saturn.pc, instr );
+                printf( "    PC:\t%.5lX -> %s\n", saturn.pc, instr );
             } else if ( !strcmp( "R0", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.R0 );
-                dump_reg( "    R0", 16, saturn.R0 );
+                set_reg( val, 16, saturn.reg_r[ 0 ] );
+                dump_reg( "    R0", 16, saturn.reg_r[ 0 ] );
             } else if ( !strcmp( "R1", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.R1 );
-                dump_reg( "    R1", 16, saturn.R1 );
+                set_reg( val, 16, saturn.reg_r[ 1 ] );
+                dump_reg( "    R1", 16, saturn.reg_r[ 1 ] );
             } else if ( !strcmp( "R2", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.R2 );
-                dump_reg( "    R2", 16, saturn.R2 );
+                set_reg( val, 16, saturn.reg_r[ 2 ] );
+                dump_reg( "    R2", 16, saturn.reg_r[ 2 ] );
             } else if ( !strcmp( "R3", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.R3 );
-                dump_reg( "    R3", 16, saturn.R3 );
+                set_reg( val, 16, saturn.reg_r[ 3 ] );
+                dump_reg( "    R3", 16, saturn.reg_r[ 3 ] );
             } else if ( !strcmp( "R4", argv[ 1 ] ) ) {
-                set_reg( val, 16, saturn.R4 );
-                dump_reg( "    R4", 16, saturn.R4 );
+                set_reg( val, 16, saturn.reg_r[ 4 ] );
+                dump_reg( "    R4", 16, saturn.reg_r[ 4 ] );
             } else if ( !strcmp( "IN", argv[ 1 ] ) ) {
-                set_reg( val, 4, saturn.IN );
-                dump_reg( "    IN", 4, saturn.IN );
+                set_reg( val, 4, saturn.in );
+                dump_reg( "    IN", 4, saturn.in );
             } else if ( !strcmp( "OUT", argv[ 1 ] ) ) {
-                set_reg( val, 3, saturn.OUT );
-                dump_reg( "   OUT", 3, saturn.OUT );
+                set_reg( val, 3, saturn.out );
+                dump_reg( "   OUT", 3, saturn.out );
             } else if ( !strcmp( "CARRY", argv[ 1 ] ) ) {
-                saturn.CARRY = ( word_1 )( val & 0x1 );
-                printf( " CARRY:\t%.1d\n", saturn.CARRY );
+                saturn.carry = ( Bit )( val & 0x1 );
+                printf( " CARRY:\t%.1d\n", saturn.carry );
             } else if ( !strcmp( "CY", argv[ 1 ] ) ) {
-                saturn.CARRY = ( word_1 )( val & 0x1 );
-                printf( " CARRY:\t%.1d\n", saturn.CARRY );
+                saturn.carry = ( Bit )( val & 0x1 );
+                printf( " CARRY:\t%.1d\n", saturn.carry );
             } else if ( !strcmp( "ST", argv[ 1 ] ) ) {
                 set_st( val );
                 dump_st();
@@ -3877,15 +3881,15 @@ static void cmd_save( int argc, char** argv )
 
 struct se {
     int se_n;
-    word_20 se_p;
+    Address se_p;
     struct se* se_next;
 };
 
 static void cmd_stack( int argc, char** argv )
 {
-    word_20 dsktop, dskbot;
-    word_20 sp = 0, end = 0, ent = 0;
-    word_20 ram_base, ram_mask;
+    Address dsktop, dskbot;
+    Address sp = 0, end = 0, ent = 0;
+    Address ram_base, ram_mask;
     char buf[ 65536 ];
     struct se *stack, *se;
     int n;
@@ -3961,7 +3965,7 @@ static void cmd_stat( int argc, char** argv )
 
 static void cmd_step( int argc, char** argv )
 {
-    word_20 next_instr;
+    Address next_instr;
     word_32 n;
     int leave;
 
@@ -3982,13 +3986,13 @@ static void cmd_step( int argc, char** argv )
     step_instruction();
 
     if ( exec_flags & EXEC_BKPT ) {
-        if ( check_breakpoint( BP_EXEC, saturn.PC ) ) {
+        if ( check_breakpoint( BP_EXEC, saturn.pc ) ) {
             enter_debugger |= BREAKPOINT_HIT;
             return;
         }
     }
 
-    next_instr = saturn.PC;
+    next_instr = saturn.pc;
 
     sched_adjtime = 0;
     schedule();
@@ -4000,7 +4004,7 @@ static void cmd_step( int argc, char** argv )
 
         leave = 0;
 
-        if ( saturn.PC == next_instr ) {
+        if ( saturn.pc == next_instr ) {
             n--;
             leave = 1;
             if ( n == 0 )
@@ -4010,14 +4014,14 @@ static void cmd_step( int argc, char** argv )
         step_instruction();
 
         if ( exec_flags & EXEC_BKPT ) {
-            if ( check_breakpoint( BP_EXEC, saturn.PC ) ) {
+            if ( check_breakpoint( BP_EXEC, saturn.pc ) ) {
                 enter_debugger |= BREAKPOINT_HIT;
                 break;
             }
         }
 
         if ( leave )
-            next_instr = saturn.PC;
+            next_instr = saturn.pc;
 
         schedule();
     }
@@ -4026,7 +4030,7 @@ static void cmd_step( int argc, char** argv )
 static void cmd_reset( int argc, char** argv )
 {
     if ( confirm( "Do a RESET (PC = 00000)?" ) ) {
-        saturn.PC = 0;
+        saturn.pc = 0;
         enter_debugger &= ~ILLEGAL_INSTRUCTION;
     }
 }
@@ -4035,15 +4039,15 @@ static void cmd_rstk( int argc, char** argv )
 {
     int i, j;
 
-    disassemble( saturn.PC, instr );
-    printf( "PC: %.5lX: %s\n", saturn.PC, instr );
-    if ( saturn.rstkp < 0 ) {
+    disassemble( saturn.pc, instr );
+    printf( "PC: %.5lX: %s\n", saturn.pc, instr );
+    if ( saturn.rstk_ptr < 0 ) {
         printf( "Empty return stack.\n" );
     } else {
         j = 0;
-        for ( i = saturn.rstkp; i >= 0; i-- ) {
-            disassemble( saturn.RSTK[ i ], instr );
-            printf( "%2d: %.5lX: %s\n", j, saturn.RSTK[ i ], instr );
+        for ( i = saturn.rstk_ptr; i >= 0; i-- ) {
+            disassemble( saturn.rstk[ i ], instr );
+            printf( "%2d: %.5lX: %s\n", j, saturn.rstk[ i ], instr );
             j++;
         }
     }
@@ -4067,8 +4071,8 @@ int debug( void )
     if ( !config.useDebugger ) {
         if ( enter_debugger & ILLEGAL_INSTRUCTION ) {
             if ( config.verbose )
-                fprintf( stderr, "reset (illegal instruction at 0x%.5lX)\n", saturn.PC );
-            saturn.PC = 0;
+                fprintf( stderr, "reset (illegal instruction at 0x%.5lX)\n", saturn.pc );
+            saturn.pc = 0;
         }
         if ( enter_debugger & USER_INTERRUPT )
             if ( config.verbose )
@@ -4078,21 +4082,13 @@ int debug( void )
 
         if ( enter_debugger & BREAKPOINT_HIT )
             if ( config.verbose )
-                printf( "breakpoint hit at 0x%.5lX ignored\n", saturn.PC );
+                printf( "breakpoint hit at 0x%.5lX ignored\n", saturn.pc );
         if ( enter_debugger & TRAP_INSTRUCTION )
             if ( config.verbose )
-                printf( "trap instruction at 0x%.5lX ignored\n", saturn.PC );
+                printf( "trap instruction at 0x%.5lX ignored\n", saturn.pc );
 
         enter_debugger = 0;
         return 0;
-    }
-
-    /*
-     * update the lcd if necessary
-     */
-    if ( device.display_touched ) {
-        device.display_touched = 0;
-        ui_update_LCD();
     }
 
     /*
@@ -4104,11 +4100,11 @@ int debug( void )
     continue_flag = false;
 
     if ( enter_debugger & ILLEGAL_INSTRUCTION ) {
-        printf( "ILLEGAL INSTRUCTION at %.5lX : %s\n", saturn.PC, str_nibbles( saturn.PC, 16 ) );
+        printf( "ILLEGAL INSTRUCTION at %.5lX : %s\n", saturn.pc, str_nibbles( saturn.pc, 16 ) );
     }
 
     if ( enter_debugger & TRAP_INSTRUCTION ) {
-        printf( "TRAP at %.5lX : %s\n", saturn.PC - 5, str_nibbles( saturn.PC - 5, 16 ) );
+        printf( "TRAP at %.5lX : %s\n", saturn.pc - 5, str_nibbles( saturn.pc - 5, 16 ) );
         enter_debugger &= ~TRAP_INSTRUCTION;
     }
 
@@ -4117,8 +4113,8 @@ int debug( void )
         /*
          * print current instruction
          */
-        disassemble( saturn.PC, instr );
-        printf( "%.5lX: %s\n", saturn.PC, instr );
+        disassemble( saturn.pc, instr );
+        printf( "%.5lX: %s\n", saturn.pc, instr );
 
         /*
          * read a command
@@ -4212,7 +4208,7 @@ int debug( void )
 
     if ( enter_debugger & ILLEGAL_INSTRUCTION ) {
         printf( "Reset (ILLEGAL INSTRUCTION)\n" );
-        saturn.PC = 0;
+        saturn.pc = 0;
     } else {
         printf( "Continue.\n" );
     }

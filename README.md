@@ -4,8 +4,8 @@ This is my fork of x48-0.6.4 where I deviate from the original code and do my ow
 
 **x48ng** is part of my little collection of HP calculators' emulators' that I took over maintenance :
 
-- [x50ng](https://codeberg.org/gwh/x50ng)
 - [x48ng](https://codeberg.org/gwh/x48ng) ← You are here
+- [x50ng](https://codeberg.org/gwh/x50ng)
 - [saturnng](https://codeberg.org/gwh/saturnng)
 - [hpemung](https://codeberg.org/gwh/hpemung)
 
@@ -31,11 +31,7 @@ You can use the script `setup-x48ng-home.sh` or simply run `x48ng --rom=<romfile
 
 ![screenshot of x48ng --tui running in a terminal](./tui-screenshot.png?raw=true "screenshot of x48ng --tui running in a terminal")
 
-### `--x11` version
-
-![screenshot of x48ng --x11](./x11-screenshot.png?raw=true "screenshot of x48ng --x11")
-
-### `--sdl`/`--sdl2` version
+### `--sdl` version
 
 ![screenshot of x48ng --sdl](./sdl-screenshot.png?raw=true "screenshot of x48ng --sdl")
 
@@ -67,26 +63,23 @@ _To quit `x48ng` use `F7`
 5. refactoring as a way to explore/understand the codebase
 6. drop Xresources
 7. link to lua to use it as a config file reader
-8. ported the SDL1 GUI to SDL2
+8. ported the SDL1 GUI to SDL2 to SDL3
 
 ## Bugs to fix
 
-See and report at https://github.com/gwenhael-le-moine/x48ng/issues
+See and report at https://codeberg.org/gwh/x48ng/issues or https://github.com/gwenhael-le-moine/x48ng/issues
 
 ## What more I would like to do:
 
 ### long(er) term
 
 - GUI in gtk(4)?
-- support the HP49g ROM?
 
 ## Compilation
 
 The `Makefile` will try to autodetect if necessary dependencies for x11 and sdl front-ends are met and enable/disable x11 and sdl front-ends accordingly.
 
-You can force disable x11 front-end by compiling with `make WITH_X11=no`.
-
-You can force disable sdl front-end by compiling with `make WITH_SDL2=no`.
+You can force disable sdl front-end by compiling with `make WITH_SDL=no`.
 
 Ncurses front-end is always built-in.
 
@@ -95,14 +88,10 @@ Ncurses front-end is always built-in.
 - Lua
 - readline
 
-for SDL2 version:
+for SDL version:
 
-- SDL2
-- SDL2_gfx
-
-for x11 version:
-
-- x11
+- SDL3
+- SDL3_gfx
 
 for Ncurses:
 

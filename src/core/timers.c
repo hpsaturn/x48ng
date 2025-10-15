@@ -7,9 +7,9 @@
 #include <sys/time.h>
 
 #include "debugger.h" /* used for in_debugger */
-#include "emulator.h"
-#include "emulator_inner.h"
+#include "emulate.h"
 #include "romio.h"
+#include "timers.h"
 
 #define NB_TIMERS 4
 
@@ -28,7 +28,7 @@
 #define calc_crc( nib ) ( crc = ( crc >> 4 ) ^ ( ( ( crc ^ ( nib ) ) & 0xf ) * 0x1081 ) )
 
 typedef struct x48_timer_t {
-    word_1 run;
+    Bit run;
     word_64 start;
     word_64 stop;
     word_64 value;
@@ -43,18 +43,18 @@ static word_64 zero = 0;
 /*
  * Ticks for THU 01.01.1970 00:00:00
  */
-word_64 unix_0_time = 0x1CF2E8F800000LL;
-word_64 ticks_10_min = 0x00b40000L;
+static word_64 unix_0_time = 0x1CF2E8F800000LL;
+static word_64 ticks_10_min = 0x00b40000L;
 
 /*
  * Will be in saturn_t in the future
  */
-word_64 set_0_time = 0x0;
+static word_64 set_0_time = 0x0;
 
 /*
  * Calculated as (unix_0_time + set_0_time)
  */
-word_64 time_offset = 0x0;
+static word_64 time_offset = 0x0;
 
 /*
  * Set ACCESSTIME: (on startup)
@@ -75,10 +75,10 @@ void set_accesstime( void )
     struct timezone tz;
 
     word_64 ticks, timeout, timer2;
-    word_20 accesstime_loc, timeout_loc;
-    word_20 accesscrc_loc, timeoutclk_loc;
+    Address accesstime_loc, timeout_loc;
+    Address accesscrc_loc, timeoutclk_loc;
     word_16 crc;
-    word_4 val;
+    Nibble val;
     int i;
     time_t gmt;
     struct tm* ltm;
@@ -292,7 +292,7 @@ t1_t2_ticks get_t1_t2( void )
     word_64 adj_time;
     word_64 diff_time;
     word_64 delta;
-    word_20 accesstime_loc;
+    Address accesstime_loc;
     int i;
 
     gettimeofday( &tv, &tz );

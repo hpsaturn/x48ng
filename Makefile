@@ -8,52 +8,111 @@
 
 TARGETS = dist/x48ng dist/x48ng-checkrom dist/x48ng-dump2rom
 
-PREFIX = /usr
-DOCDIR = $(PREFIX)/doc/x48ng
-MANDIR = $(PREFIX)/man
+VERSION_MAJOR = 0
+VERSION_MINOR = 50
+PATCHLEVEL = 0
 
-CFLAGS ?= -g -O2
-FULL_WARNINGS = no
+PREFIX ?= /usr
+DOCDIR ?= $(PREFIX)/doc/x48ng
+MANDIR ?= $(PREFIX)/man
+
 LUA_VERSION ?= lua
 PKG_CONFIG ?= pkg-config
-WITH_X11 ?= yes
+
+OPTIM ?= 2
+FULL_WARNINGS ?= no
 WITH_SDL ?= yes
-WITH_SDL2 ?= yes
+WITH_GTK ?= no					#disabled for now, no real code yet
 
-VERSION_MAJOR = 0
-VERSION_MINOR = 41
-PATCHLEVEL = 1
-
-DOTOS = src/emu_serial.o \
-	src/emu_emulate.o \
-	src/emu_init.o \
-	src/emu_keyboard.o \
-	src/emu_memory.o \
-	src/emu_register.o \
-	src/emu_timer.o \
-	src/debugger.o \
-	src/config.o \
-	src/romio.o \
-	src/ui_text.o \
-	src/ui.o \
-	src/main.o
-
-MAKEFLAGS +=-j$(NUM_CORES) -l$(NUM_CORES)
+makeflags +=-j$(NUM_CORES) -l$(NUM_CORES)
 
 cc-option = $(shell if $(CC) $(1) -c -x c /dev/null -o /dev/null > /dev/null 2>&1; \
-	      then echo $(1); fi)
+		  then echo $(1); fi)
+
+### lua
+LUA_CFLAGS = $(shell "$(PKG_CONFIG)" --cflags $(LUA_VERSION))
+LUA_LIBS = $(shell "$(PKG_CONFIG)" --libs $(LUA_VERSION))
+
+### debugger
+DEBUG_CFLAGS = $(shell "$(PKG_CONFIG)" --cflags readline)
+DEBUG_LIBS = $(shell "$(PKG_CONFIG)" --libs readline)
+
+### Text UI
+NCURSES_CFLAGS = $(shell "$(PKG_CONFIG)" --cflags ncursesw) -DNCURSES_WIDECHAR=1 -DHAS_NCURSES=1
+NCURSES_LIBS = $(shell "$(PKG_CONFIG)" --libs ncursesw)
+
+### SDL UI
+ifeq ($(WITH_SDL), yes)
+	SDL_CFLAGS = $(shell "$(PKG_CONFIG)" --cflags sdl3) -DHAS_SDL=1
+	SDL_LIBS = $(shell "$(PKG_CONFIG)" --libs sdl3)
+	SDL_SRC = src/ui4x/sdl.c
+	SDL_HEADERS = src/ui4x/sdl.h
+endif
+
+ifeq ($(WITH_GTK), yes)
+	GTK_CFLAGS = $(shell "$(PKG_CONFIG)" --cflags gtk4) -DHAS_GTK=1
+	GTK_LIBS = $(shell "$(PKG_CONFIG)" --libs gtk4)
+	GTK_SRC = src/ui4x/gtk.c
+	GTK_HEADERS = src/ui4x/gtk.h
+endif
+
+LIBS = -lm \
+	$(LUA_LIBS) \
+	$(DEBUG_LIBS) \
+	$(NCURSES_LIBS) \
+	$(SDL_LIBS) \
+	$(GTK_LIBS)
+
+HEADERS = src/options.h \
+	src/romio.h \
+	src/core/debugger.h \
+	src/core/emulate.h \
+	src/core/init.h \
+	src/core/memory.h \
+	src/core/persistence.h \
+	src/core/registers.h \
+	src/core/timers.h \
+	src/core/serial.h \
+	src/ui4x/api.h \
+	src/ui4x/bitmaps_misc.h \
+	src/ui4x/common.h \
+	src/ui4x/inner.h \
+	src/ui4x/ncurses.h \
+	$(SDL_HEADERS) \
+	$(GTK_HEADERS)
+
+SRC = src/options.c \
+	src/romio.c \
+	src/main.c \
+	src/core/debugger.c \
+	src/core/emulate.c \
+	src/core/init.c \
+	src/core/persistence.c \
+	src/core/memory.c \
+	src/core/registers.c \
+	src/core/timers.c \
+	src/core/serial.c \
+	src/ui4x_api_impl.c \
+	src/ui4x/48gx.c \
+	src/ui4x/48sx.c \
+	src/ui4x/49g.c \
+	src/ui4x/50g.c \
+	src/ui4x/common.c \
+	src/ui4x/fonts.c \
+	src/ui4x/ncurses.c \
+	$(SDL_SRC) \
+	$(GTK_SRC)
+OBJS = $(SRC:.c=.o)
 
 ifeq ($(FULL_WARNINGS), no)
-EXTRA_WARNING_FLAGS := -Wno-unused-function \
+EXTRA_WARNING_CFLAGS := -Wno-unused-function \
 	-Wno-redundant-decls \
 	$(call cc-option,-Wno-maybe-uninitialized) \
 	$(call cc-option,-Wno-discarded-qualifiers) \
 	$(call cc-option,-Wno-uninitialized) \
 	$(call cc-option,-Wno-ignored-qualifiers)
-endif
-
-ifeq ($(FULL_WARNINGS), yes)
-EXTRA_WARNING_FLAGS := -Wunused-function \
+else
+EXTRA_WARNING_CFLAGS := -Wunused-function \
 	-Wredundant-decls \
 	-fsanitize=thread \
 	$(call cc-option,-Wunused-variable)
@@ -73,63 +132,31 @@ override CFLAGS := -std=c11 \
 	$(call cc-option,-Wjump-misses-init) \
 	$(call cc-option,-Wlogical-op) \
 	$(call cc-option,-Wno-unknown-warning-option) \
-	$(EXTRA_WARNING_FLAGS) \
-	$(CFLAGS)
-
-override CPPFLAGS := -I./src/ -D_GNU_SOURCE=1 \
+	$(EXTRA_WARNING_CFLAGS) \
+	$(SDL_CFLAGS) \
+	$(GTK_CFLAGS) \
+	$(NCURSES_CFLAGS) \
+	$(LUA_CFLAGS) \
+	$(DEBUG_CFLAGS) \
+	-O$(OPTIM) \
+	-D_GNU_SOURCE=1 \
 	-DVERSION_MAJOR=$(VERSION_MAJOR) \
 	-DVERSION_MINOR=$(VERSION_MINOR) \
 	-DPATCHLEVEL=$(PATCHLEVEL) \
-	$(CPPFLAGS)
+	-I./src/ \
+	$(CFLAGS)
 
-LIBS = -lm
+depfiles = $(objects:.o=.d)
 
-### lua
-override CFLAGS += $(shell "$(PKG_CONFIG)" --cflags $(LUA_VERSION))
-LIBS += $(shell "$(PKG_CONFIG)" --libs $(LUA_VERSION))
+# Have the compiler output dependency files with make targets for each
+# of the object files. The `MT` option specifies the dependency file
+# itself as a target, so that it's regenerated when it should be.
+%.dep.mk: %.c
+	$(CC) -M -MP -MT '$(<:.c=.o) $@' $(CPPFLAGS) $< > $@
 
-### debugger
-override CFLAGS += $(shell "$(PKG_CONFIG)" --cflags readline)
-LIBS += $(shell "$(PKG_CONFIG)" --libs readline)
-
-### Text UI
-override CFLAGS += $(shell "$(PKG_CONFIG)" --cflags ncursesw) -DNCURSES_WIDECHAR=1
-LIBS += $(shell "$(PKG_CONFIG)" --libs ncursesw)
-
-### X11 UI
-ifeq ($(WITH_X11), yes)
-	X11CFLAGS = $(shell "$(PKG_CONFIG)" --cflags x11 xext) -D_GNU_SOURCE=1
-	X11LIBS = $(shell "$(PKG_CONFIG)" --libs x11 xext)
-
-	override CFLAGS += $(X11CFLAGS) -DHAS_X11=1
-	LIBS += $(X11LIBS)
-	DOTOS += src/ui_x11.o
-endif
-
-### SDL2 UI
-ifeq ($(WITH_SDL), yes)
-	WITH_SDL2 = yes
-endif
-ifeq ($(WITH_SDL2), yes)
-	SDLCFLAGS = $(shell "$(PKG_CONFIG)" --cflags sdl2)
-	SDLLIBS = $(shell "$(PKG_CONFIG)" --libs sdl2)
-
-	override CFLAGS += $(SDLCFLAGS) -DHAS_SDL2=1
-	LIBS += $(SDLLIBS)
-	DOTOS += src/ui_sdl2.o
-endif
-
-# depfiles = $(objects:.o=.d)
-
-# # Have the compiler output dependency files with make targets for each
-# # of the object files. The `MT` option specifies the dependency file
-# # itself as a target, so that it's regenerated when it should be.
-# %.dep.mk: %.c
-#	$(CC) -M -MP -MT '$(<:.c=.o) $@' $(CPPFLAGS) $< > $@
-
-# # Include each of those dependency files; Make will run the rule above
-# # to generate each dependency file (if it needs to).
-# -include $(depfiles)
+# Include each of those dependency files; Make will run the rule above
+# to generate each dependency file (if it needs to).
+-include $(depfiles)
 
 .PHONY: all clean clean-all pretty-code mrproper install uninstall
 
@@ -137,15 +164,15 @@ all: $(TARGETS)
 
 dist/x48ng-dump2rom: src/legacy_tools/dump2rom.o
 dist/x48ng-checkrom: src/legacy_tools/checkrom.o src/romio.o
-dist/x48ng: $(DOTOS)
+dist/x48ng: $(OBJS) $(HEADERS)
 
 # Binaries
 $(TARGETS):
-	$(CC) $^ -o $@ $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(LIBS)
+	$(CC) $^ -o $@ $(CFLAGS) $(LDFLAGS) $(LIBS)
 
 # Cleaning
 clean:
-	rm -f src/*.o src/legacy_tools/*.o src/*.dep.mk src/legacy_tools/*.dep.mk
+	rm -f $(OBJS) src/legacy_tools/*.o src/*.dep.mk src/legacy_tools/*.dep.mk
 
 mrproper: clean
 	rm -f $(TARGETS)
@@ -153,9 +180,13 @@ mrproper: clean
 
 clean-all: mrproper
 
+# for clangd
+compile_commands.json: mrproper
+	bear -- make dist/x48ng
+
 # Formatting
 pretty-code:
-	clang-format -i src/*.c src/*.h src/legacy_tools/*.c
+	clang-format -i src/*.c src/*.h src/legacy_tools/*.c src/ui4x/*.c src/ui4x/*.h
 
 # Installing
 get-roms:
