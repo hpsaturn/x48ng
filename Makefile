@@ -9,8 +9,8 @@
 TARGETS = dist/x48ng dist/x48ng-checkrom dist/x48ng-dump2rom
 
 VERSION_MAJOR = 0
-VERSION_MINOR = 50
-PATCHLEVEL = 0
+VERSION_MINOR = 51
+PATCHLEVEL = 1
 
 PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/doc/x48ng
@@ -198,12 +198,11 @@ dist/config.lua: dist/x48ng
 install: all dist/config.lua
 	install -m 755 -d -- $(DESTDIR)$(PREFIX)/bin
 	install -c -m 755 dist/x48ng $(DESTDIR)$(PREFIX)/bin/x48ng
+	install -c -m 755 dist/x48ng-launcher $(DESTDIR)$(PREFIX)/bin/x48ng-launcher
 
 	install -m 755 -d -- $(DESTDIR)$(PREFIX)/share/x48ng
 	install -c -m 644 dist/hplogo.png $(DESTDIR)$(PREFIX)/share/x48ng/hplogo.png
 	cp -R dist/ROMs/ $(DESTDIR)$(PREFIX)/share/x48ng/
-	install -c -m 755 dist/setup-x48ng-home.sh $(DESTDIR)$(PREFIX)/share/x48ng/setup-x48ng-home.sh
-	chmod 755 $(DESTDIR)$(PREFIX)/share/x48ng/setup-x48ng-home.sh
 
 	install -m 755 -d -- $(DESTDIR)$(PREFIX)/libexec
 	install -c -m 755 dist/x48ng-dump2rom $(DESTDIR)$(PREFIX)/libexec/x48ng-dump2rom
@@ -221,6 +220,7 @@ install: all dist/config.lua
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/x48ng
+	rm -f $(DESTDIR)$(PREFIX)/bin/x48ng-launcher
 	rm -f $(DESTDIR)$(PREFIX)/libexec/x48ng-dump2rom
 	rm -f $(DESTDIR)$(PREFIX)/libexec/x48ng-checkrom
 	rm -f $(DESTDIR)$(MANDIR)/man1/x48ng.1
